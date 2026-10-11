@@ -906,8 +906,12 @@ class Throttler:
     - ``tool_call`` / ``tool_result`` / ``thinking`` 在**四档**都进组缓冲，不逐条发出；
       收口时由 ``render_process_group`` 渲染为一条 dsh 形态消息（组头行 + 步骤行 /
       思考行，**无代码框**）。
-    - 低信号 ``text``（非 final）只累积，不逐条发；在 ``turn_end`` 或 status 终态时
-      flush 为一条普通 markdown 文本（无前缀、无围栏）。
+    - **组边界（v0.7.2，对齐 dsh ``ChatGroupSeat``）**：出现助手叙述文本（非 final
+      ``text``）且此刻确有过程组待收口时**先收口过程组再输出该段叙述**——组不再跨叙述
+      累积到 ``turn_end``。无待收口组时叙述仍累积（连续叙述不拆分）。``turn_end`` /
+      终态 status 只做「收口残余组 + 收束行」（残余叙述文本兜底 flush，不丢信息）。
+    - 低信号 ``text``（非 final）累积为一条普通 markdown 文本（无前缀、无围栏）；
+      在组边界、``turn_end`` 或 status 终态 flush。
     - 收束行（``render_turn_close``）：``turn_end`` 优先（带时长），否则终态 status
       兜底；**一轮最多一条**，避免 turn_end 与 status completed 双发。
     - 收口时机（沿用）：``turn_end``、终态 status、final text、新 ``turn_start``（上一轮
@@ -1028,6 +1032,18 @@ class Throttler:
                 text = str(event.get("text") or "")
                 if text:
                     self._text_buf.append(text)
+                # 组边界修正（v0.7.2，对齐 dsh ``ChatGroupSeat``：出现助手叙述文本 /
+                # INDEPENDENT 节点 / 轮次结束即断组）：此刻若确有过程组待收口，**先收口
+                # 该组、再输出这段叙述**——叙述不再等到 ``turn_end`` 才与后续工具挤进
+                # 同一条，于是「工具→叙述→工具→叙述」得到 2 组 + 2 段叙述。
+                # 无待收口组时沿用「低信号 text 累积」语义：连续叙述不会被拆成多条。
+                if self._members:
+                    group = self._flush_process_group()
+                    if group:
+                        candidates.append(group)
+                    flushed = self._flush_text()
+                    if flushed:
+                        candidates.append(flushed)
         elif etype == "turn_end":
             # turn_end：过程组 → 叙述文本 → 收束行（带时长）。
             group = self._flush_process_group()

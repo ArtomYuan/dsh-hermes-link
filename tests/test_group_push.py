@@ -636,9 +636,10 @@ class NoRegressionTest(unittest.TestCase):
         group = "\n".join(["⌄ 执行了命令", "▸ 运行命令 · git log", "  a1b2c3"])
         self.assertEqual(len(sent), 4)
         self.assertEqual(sent[0], group)
-        # final 文本在 final 事件即发出（残存组先收口），叙述文本在终态 flush。
-        self.assertEqual(sent[1], "最终")
-        self.assertEqual(sent[2], "叙述")
+        # v0.7.2 组边界：非 final 叙述到达时若有待收口组 → 先收口组、再发该叙述；
+        # final 文本随后发出。顺序＝事件到达顺序（v0.7.0 曾把 final 排在叙述之前）。
+        self.assertEqual(sent[1], "叙述")
+        self.assertEqual(sent[2], "最终")
         self.assertRegex(sent[3], r"^▸ 已完成，用时 \d+秒$")
 
     def test_verbose_differs_by_header_and_truncation(self):

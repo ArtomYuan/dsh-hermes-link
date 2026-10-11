@@ -1276,7 +1276,8 @@ class ConsumeStreamContentTest(unittest.TestCase):
         # 混合流：turn_start + thinking + tool_call + tool_result + 非 final text
         # + final text + turn_end + 终态 status。content=false（standard 档）下
         # 一轮收口为一条过程组（组头 + 思考预览 + 步骤行）；turn_start 不产出行；
-        # final 文本到达时残存组先收口；turn_end 时叙述文本 flush 后接收束行。
+        # v0.7.2 组边界：非 final 叙述到达且有待收口组 → 先收口组再发该叙述；
+        # final 文本到达时残存组先收口；turn_end 时只有收束行（残余已即时发出）。
         results = [
             {"task": {"status": {"state": "TASK_STATE_SUBMITTED"}}},
             _artifact_update([_data_part({"kind": "turn_start", "turn": 1})], last_chunk=False),
@@ -1310,8 +1311,11 @@ class ConsumeStreamContentTest(unittest.TestCase):
         )
         self.assertEqual(len(sent), 4)
         self.assertEqual(sent[0], group)
-        self.assertEqual(sent[1], "最终结果正文")
-        self.assertEqual(sent[2], "中间叙述正文")
+        # v0.7.2 组边界：非 final 叙述到达时若有待收口组 → 先收口组、再输出该叙述。
+        # 故顺序为「组 → 中间叙述 → 最终文本 → 收束行」，与事件到达顺序一致
+        # （v0.7.0 曾把更晚到的 final 文本排在更早的叙述之前，属顺序倒置）。
+        self.assertEqual(sent[1], "中间叙述正文")
+        self.assertEqual(sent[2], "最终结果正文")
         self.assertRegex(sent[3], r"^▸ 已完成，用时 \d+秒$")
         # standard 无结果体：工具结果正文不出现（步骤行摘要仍含参数，符合 dsh 行形态）。
         for line in sent:
