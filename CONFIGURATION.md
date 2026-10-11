@@ -624,6 +624,48 @@ plugins:
 
 未配置时保持 `true`，向后兼容已部署副本的现有行为。
 
+### 卡片直播（collector.card，v0.7.2）
+
+完整键路径：`plugins.entries.hermes-a2a-bridge.settings.collector.card`。
+
+| 值 | 含义 |
+| --- | --- |
+| `off`（默认） | 过程组发**纯文本行**（v0.7.0 形态，即终极回退层） |
+| `panel` | 过程组改发**飞书卡片 JSON 2.0 折叠面板**（一组一块，默认折叠） |
+
+```yaml
+# ~/.hermes/config.yaml
+plugins:
+  entries:
+    hermes-a2a-bridge:
+      settings:
+        collector:
+          card: panel      # off（默认）/ panel
+```
+
+**四档语义与文本版完全一致**（同一份文案算法：`group_title` / `dsh_tool_title` /
+`dsh_tool_summary` / `render_turn_close` 全部复用）：
+
+| 档位 | 卡片形态 |
+| --- | --- |
+| `compact` | 折叠面板、`expanded=false`；面板内只有思考行（步骤行按档位不出） |
+| `standard` | 折叠面板、`expanded=false` + 步骤行 |
+| `detailed` | 折叠面板、`expanded=true` + 步骤行 + 结果体 |
+| `verbose` | **不用面板**，成员行在 `body.elements` 平铺（无组头，同文本版） |
+
+**分卡预算**：每张卡 ≤30 KB / ≤200 元素（官方硬限）。超限时**按步骤行边界**切卡，
+续卡重复折叠面板标题并标注「（续）」。实测单卡容量（同源步骤行）：
+`standard` ≈197 步、`detailed` ≈181 步、`verbose` ≈183 步；`compact` 面板内不含步骤行，
+体积与步数无关，故不切卡。
+
+**降级链**：卡片是**增强层**——发送失败 / 抛异常 / 适配器无 `send_card` 时一律
+**回落为同内容的文本行**（不丢信息），并在日志记一条 warning。`collector.card` 只影响
+承载形态，不影响 `enabled` / `events` / `content` / `live_detail` 任何既有语义。
+
+**适配器要求**：发卡走飞书适配器的 `send_card(chat_id, card, metadata)`；适配器需为
+含该方法的新版（缺失即自动回落文本行，功能不中断）。权限复用现有 `im:message`，
+**无需新增权限、无需重新发布应用版本**。
+
 ### Dashboard 可视化开关（即时生效）
 
 本插件自带 Dashboard 扩展面：插件管理页（9120「插件管理」）顶部显示

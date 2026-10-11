@@ -119,6 +119,10 @@ _CONTENT = True
 # ``_read_live_detail`` 解析为四档之一（compact/standard/detailed/verbose，
 # follow-dsh 读 dsh profile patch，失败回落 detailed）。
 _LIVE_DETAIL = "follow-dsh"
+
+# collector.card（v0.7.2 新增）：off（默认，纯文本行）/ panel（2.0 折叠卡）。
+# 与其它 collector 键同节奏：register() 存原始值，每次任务开始经 _read_card_mode 热读。
+_CARD = "off"
 _CTX: Optional[Any] = None
 
 # 直播档位（有序，对齐 dsh TRANSCRIPT_VIEW_MODES / consumer.LIVE_DETAIL_MODES）。
@@ -130,6 +134,7 @@ _SWITCH_GLOBAL_BY_KEY = {
     "collector.events": "_EVENTS",
     "collector.content": "_CONTENT",
     "collector.live_detail": "_LIVE_DETAIL",
+    "collector.card": "_CARD",
 }
 # consumer 模块缓存（惰性 import，见 _import_consumer）。
 _CONSUMER_MODULE: Optional[Any] = None
@@ -195,6 +200,22 @@ def _read_live_detail() -> str:
     return consumer.resolve_collector_level(
         live_detail_raw, content_raw, dsh_home, dsh_profile
     )
+
+
+def _read_card_mode() -> Optional[str]:
+    """读 ``collector.card``（``off``/``panel``，默认 ``off``）并归一化。
+
+    每次流式任务开始时读一次（与 ``events`` / ``live_detail`` 同节奏）：任务中途改
+    配置不影响进行中任务。``off`` → ``None``（纯文本行，回退层）；``panel`` → 折叠卡。
+    不影响 ``enabled`` / ``events`` / ``content`` / ``live_detail`` 任何既有键。
+    """
+    consumer = _import_consumer()
+    default = getattr(consumer, "DEFAULT_CARD", "off")
+    raw = _read_switch_raw("collector.card", default)
+    resolve = getattr(consumer, "resolve_card_mode", None)
+    if not callable(resolve):  # 旧版 consumer / 单测替身：按「关」处理，不阻断调用
+        return None
+    return resolve(raw)
 
 
 def _clean_segment(seg: str) -> str:
@@ -394,13 +415,15 @@ def _stream_dsh_call(message: str, context_id: str) -> str:
     # live_detail 经 _read_live_detail 解析为四档之一（含 follow-dsh 读文件）。
     events = _read_switch("collector.events", True)
     level = _read_live_detail()
+    # collector.card（默认 off）：过程组是否改发 2.0 折叠卡；off 时纯文本行（回退层）。
+    card = _read_card_mode()
     # 仅消息面（platform/chat_id 均非空）才真发送直播；否则 noop sender（已在上面
     # 告警，不会无声）。
     # v0.7.0 起直播与结果送达的正文都不含代码框，分块一律走纯文本换行边界。
     sender = (
         consumer.make_sender(_CTX)
         if live_routable
-        else lambda p, c, t, text: {"ok": True}  # noqa: E731  # 不真实发送
+        else lambda p, c, t, text, card=None: {"ok": True}  # noqa: E731  # 不真实发送
     )
     logger.info(
         "hermes-a2a-bridge: hook stream dsh agent=dsh msg_len=%d context_id=%r "
@@ -425,6 +448,7 @@ def _stream_dsh_call(message: str, context_id: str) -> str:
         timeout=timeout,
         events=events,
         level=level,
+        card=card,
     )
     logger.info(
         "hermes-a2a-bridge: hook stream consumed events_seen=%s messages_sent=%s "
@@ -672,7 +696,7 @@ def register(ctx) -> None:
     运行期读取点已改热读（``_read_switch`` / ``_read_live_detail``），此处的值不再
     固化生效。旧键 ``collector.code_blocks`` 已废弃：此处不读取（一律忽略）。
     """
-    global _COLLECTOR_ENABLED, _EVENTS, _CONTENT, _LIVE_DETAIL, _CTX
+    global _COLLECTOR_ENABLED, _EVENTS, _CONTENT, _LIVE_DETAIL, _CARD, _CTX
     _CTX = ctx
     try:
         _COLLECTOR_ENABLED = _to_bool(ctx.get_config("collector.enabled", False))
@@ -682,12 +706,15 @@ def register(ctx) -> None:
         _CONTENT = _to_bool(ctx.get_config("collector.content", True))
         # live_detail 默认 follow-dsh；存原始值（解析在每次任务开始经 _read_live_detail）。
         _LIVE_DETAIL = ctx.get_config("collector.live_detail", "follow-dsh")
+        # card 默认 off（灰度）：存原始值，解析在每次任务开始经 _read_card_mode。
+        _CARD = ctx.get_config("collector.card", "off")
     except Exception as exc:  # 读配置失败按默认处理，绝不阻断插件加载
         logger.warning("hermes-a2a-bridge: read collector settings failed: %s", exc)
         _COLLECTOR_ENABLED = False
         _EVENTS = True
         _CONTENT = True
         _LIVE_DETAIL = "follow-dsh"
+        _CARD = "off"
 
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("post_tool_call", _on_post_tool_call)

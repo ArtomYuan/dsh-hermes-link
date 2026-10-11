@@ -385,6 +385,67 @@ LIVE_DETAIL_FALLBACK = "detailed"
 DSH_HOME_DEFAULT = "/home/artom/.dsh"
 DSH_PROFILE_DEFAULT = "web"
 
+# --------------------------------------------------------------------------
+# 卡片渲染（v0.7.2 / plan §4.2 Phase 1）
+# --------------------------------------------------------------------------
+# collector.card：off（默认，纯文本行 = 终极回退层）/ panel（2.0 折叠卡，一组一块）。
+CARD_MODES = ("off", "panel")
+DEFAULT_CARD = "off"
+
+# 官方硬限（飞书卡片）：体积 ≤30 KB、元素/组件数 ≤200（plan §2.4，均【直证】）。
+# 取十进制 30000 而非 30720，留出编码/换行差异的余量。
+_CARD_MAX_BYTES = 30000
+_CARD_MAX_ELEMENTS = 200
+
+# 续卡：重复折叠面板标题并标注「续」（plan §4.2 第 4 条）。
+_CARD_CONT_MARK = "（续）"
+
+# 面板标题前缀图标（`standard_icon`）。
+# **默认 None = 不发图标**：官方折叠面板示例用的 token `down-small-ccm_outlined`
+# **不在图标库导出清单里**（plan §2.2），其可用性属 T1「待实测」。按 V1「只用直证
+# 字段」的口径，Phase 1 不把它放进默认路径——组头视觉锚点由标题文本里的 `⌄`
+# 承担（与文本版逐字同源）。T1/T2 通过后把此常量设为 token 即可启用。
+_CARD_PANEL_ICON_TOKEN: Optional[str] = None
+
+_CARD_ROW_TEXT_SIZE = "notation"  # 面板内成员行字号：notation = 辅助信息 12px（【直证】）
+
+
+class CardMessage(str):
+    """一条「文本回退层 + 可选卡片」的外发件。
+
+    是 ``str`` 子类（内容为文本版渲染结果），因此：
+    - 既有「按文本比对」的断言/消费方**完全不受影响**（``card`` 缺省为 ``None``）；
+    - 卡片模式下另带 ``card`` 字段，发送层优先发卡、失败回落本字符串。
+    """
+
+    __slots__ = ("card",)
+
+    def __new__(cls, text: str, card: Optional[Dict[str, Any]] = None) -> "CardMessage":
+        obj = super().__new__(cls, text)
+        obj.card = card
+        return obj
+
+
+def _card_bytes(card: Dict[str, Any]) -> int:
+    """卡片的 UTF-8 JSON 字节数（官方 ≤30 KB 口径）。"""
+    return len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
+
+
+def _card_element_count(card: Dict[str, Any]) -> int:
+    """递归统计带 ``tag`` 的组件/元素个数（官方 ≤200 口径）。"""
+    total = 0
+    stack: list = [card]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if "tag" in node:
+                total += 1
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return total
+
+
 def _split_plain_chunks(
     content: str, limit: int = 8000, marker: str = "⏩ 续"
 ) -> list:
@@ -675,6 +736,40 @@ def render_result_body(result: Any, level: Optional[str] = None) -> str:
     return "\n".join(f"{_BODY_INDENT}{line}" for line in lines)
 
 
+def _member_row_blocks(
+    members: Iterable[Dict[str, Any]], mode: str
+) -> tuple:
+    """把过程组成员渲染为「每成员一块」的文本块列表（文本版与卡片版共用）。
+
+    这是四档语义的**唯一实现**：``render_process_group``（文本）与
+    ``render_process_group_card``（卡片）都从这里取块，保证两者逐字同源。
+
+    @param members - 组内成员序列（发生顺序）。
+    @param mode - 已归一的档位（compact/standard/detailed/verbose）。
+    @returns ``(kinds, blocks)``：``kinds`` 为工具活动类别（供组头文案），
+             ``blocks`` 为逐成员渲染块（块内可能多行）。
+    """
+    kinds: list = []
+    blocks: list = []
+    for member in members:
+        kind = member.get("kind")
+        if kind == "step":
+            kinds.append(tool_activity_kind(member.get("name")))
+            if mode in _MEMBER_MODES:
+                row = render_step_row(member.get("name"), member.get("arguments"), mode)
+                body = (
+                    render_result_body(member.get("result"), mode)
+                    if mode in _BODY_MODES
+                    else ""
+                )
+                blocks.append(f"{row}\n{body}" if body else row)
+        elif kind == "think":
+            # dsh ``processActivity`` 只统计 tool-call 节点，思考不参与组头类别串
+            # （组内无工具时 ``processTitle`` 回落「已完成分析」）。
+            blocks.append(render_think_row(member.get("text"), mode))
+    return kinds, blocks
+
+
 def render_process_group(
     members: Iterable[Dict[str, Any]],
     level: Optional[str] = None,
@@ -701,30 +796,199 @@ def render_process_group(
     @returns 多行正文（组成员为空时返回空串，调用方不发消息）。
     """
     mode = level if level in LIVE_DETAIL_MODES else "detailed"
-    rows: list = []
-    kinds: list = []
     member_list = list(members)
-    for member in member_list:
-        kind = member.get("kind")
-        if kind == "step":
-            kinds.append(tool_activity_kind(member.get("name")))
-            if mode in _MEMBER_MODES:
-                rows.append(render_step_row(member.get("name"), member.get("arguments"), mode))
-                if mode in _BODY_MODES:
-                    body = render_result_body(member.get("result"), mode)
-                    if body:
-                        rows.append(body)
-        elif kind == "think":
-            # dsh ``processActivity`` 只统计 tool-call 节点，思考不参与组头类别串
-            # （组内无工具时 ``processTitle`` 回落「已完成分析」）。
-            rows.append(render_think_row(member.get("text"), mode))
+    kinds, blocks = _member_row_blocks(member_list, mode)
     if not member_list:
         return ""
     if mode == "verbose":
         # dsh ``stepGrouping=none``：无组头行，只有成员行。
-        return "\n".join(rows)
+        return "\n".join(blocks)
     header = f"{_GLYPH_GROUP} {group_title(kinds)}"
-    return f"{header}\n" + "\n".join(rows) if rows else header
+    return f"{header}\n" + "\n".join(blocks) if blocks else header
+
+
+def render_process_group_card(
+    members: Iterable[Dict[str, Any]],
+    level: Optional[str] = None,
+    *,
+    card_index: int = 1,
+    continued: bool = False,
+) -> Dict[str, Any]:
+    """把一个过程组渲染为**飞书卡片 JSON 2.0**（折叠面板，一组一块）。
+
+    四档语义与文本版 ``render_process_group`` **完全一致**（同一份 ``_member_row_blocks``
+    文案），只换承载：
+
+    - ``compact``：折叠面板，``expanded=false``（默认折叠），面板内成员行同文本版
+      （工具的步骤行按档位不出，思考行照出）；
+    - ``standard``：折叠面板，``expanded=false`` + 步骤行；
+    - ``detailed``：折叠面板，``expanded=true`` + 步骤行 + 结果体；
+    - ``verbose``：**不用面板**，成员行在 ``body.elements`` 平铺直出（同文本版无组头）。
+
+    组头文案取文本版同一函数（``⌄ <group_title>``）放进 ``header.title``（markdown）。
+    ``continued`` 为真时标题追加「（续）」（分卡续页）。
+
+    **只用【直证】字段**（2.0 对未知属性会报错）：``schema`` / ``config.width_mode`` /
+    ``body.elements`` / ``collapsible_panel``（``element_id``/``expanded``/``direction``/
+    ``vertical_spacing``/``padding``/``header.title``/``header.vertical_align``/
+    ``header.padding``/``header.width``/``border``/``elements``）/ ``markdown``
+    （``element_id``/``content``/``text_size``）。``header.icon.*`` 默认不发
+    （``_CARD_PANEL_ICON_TOKEN`` 为 None，属 T1/T2 待实测项）。
+
+    @param members - 组内成员序列（发生顺序）。
+    @param level - 四档位之一。
+    @param card_index - 本组内第几张卡（用于生成唯一 ``element_id``，从 1 起）。
+    @param continued - 是否为续卡（标题加「（续）」）。
+    @returns 2.0 卡片 JSON；成员为空时返回 ``{}``（调用方按假值跳过）。
+    """
+    mode = level if level in LIVE_DETAIL_MODES else "detailed"
+    member_list = list(members)
+    if not member_list:
+        return {}
+    kinds, blocks = _member_row_blocks(member_list, mode)
+
+    prefix = f"dsh_c{card_index}"
+    rows = [
+        {
+            "tag": "markdown",
+            "element_id": f"{prefix}_e{index}",
+            "content": block,
+            "text_size": _CARD_ROW_TEXT_SIZE,
+        }
+        for index, block in enumerate(blocks, start=1)
+    ]
+
+    card: Dict[str, Any] = {"schema": "2.0", "config": {"width_mode": "fill"}}
+    if mode == "verbose":
+        # dsh ``stepGrouping=none``：不用面板，成员行平铺。
+        card["body"] = {"elements": rows}
+        return card
+
+    title = f"{_GLYPH_GROUP} {group_title(kinds)}"
+    if continued:
+        title = f"{title}{_CARD_CONT_MARK}"
+    header: Dict[str, Any] = {
+        "title": {"tag": "markdown", "content": title},
+        "vertical_align": "center",
+        "padding": "4px 0px 4px 8px",
+        "width": "auto_when_fold",
+    }
+    if _CARD_PANEL_ICON_TOKEN:
+        header["icon"] = {
+            "tag": "standard_icon",
+            "token": _CARD_PANEL_ICON_TOKEN,
+            "size": "16px 16px",
+        }
+        header["icon_position"] = "follow_text"
+        header["icon_expanded_angle"] = -180
+    panel = {
+        "tag": "collapsible_panel",
+        "element_id": f"{prefix}_panel",
+        "expanded": mode == "detailed",
+        "direction": "vertical",
+        "vertical_spacing": "4px",
+        "padding": "8px 8px 8px 8px",
+        "header": header,
+        "border": {"color": "grey", "corner_radius": "5px"},
+        "elements": rows,
+    }
+    card["body"] = {"elements": [panel]}
+    return card
+
+
+def _card_chunk_fits(members: list, mode: str, card_index: int) -> bool:
+    """试探性判断「把这些成员放进一张卡」是否仍在 30 KB / 200 元素预算内。"""
+    card = render_process_group_card(members, mode, card_index=card_index)
+    if not card:
+        return True
+    return (
+        _card_bytes(card) <= _CARD_MAX_BYTES
+        and _card_element_count(card) <= _CARD_MAX_ELEMENTS
+    )
+
+
+def _trim_card_to_budget(card: Dict[str, Any]) -> Dict[str, Any]:
+    """单成员即超预算时的兜底：自后向前裁剪 markdown 正文直到进预算，并标注省略。
+
+    正常档位（compact/standard/detailed）的成员行已被 ``_ROW_DETAIL_MAX`` 截断，
+    触及此路径的只可能是 ``verbose`` 档的超长结果体。裁剪会记 ``logger.warning``。
+    """
+    if not card or _card_bytes(card) <= _CARD_MAX_BYTES:
+        return card
+    logger.warning(
+        "hermes-a2a-bridge: 单个过程组超过 %d 字节卡片上限，已裁剪正文（verbose 超长结果）",
+        _CARD_MAX_BYTES,
+    )
+    elements: list = []
+    body = card.get("body") or {}
+    for element in body.get("elements") or []:
+        if element.get("tag") == "collapsible_panel":
+            elements = element.get("elements") or []
+    targets = elements or (body.get("elements") or [])
+    marker = "\n…（超出卡片 30KB 上限，已截断）"
+    for element in reversed(targets):
+        if _card_bytes(card) <= _CARD_MAX_BYTES:
+            break
+        content = str(element.get("content") or "")
+        while content and _card_bytes(card) > _CARD_MAX_BYTES:
+            overflow = _card_bytes(card) - _CARD_MAX_BYTES
+            content = content[: max(0, len(content) - max(overflow, 64))]
+        element["content"] = content + marker
+    return card
+
+
+def _split_card_chunks(
+    members: Iterable[Dict[str, Any]], level: Optional[str] = None
+) -> list:
+    """按**步骤行边界**把过程组切成若干张卡（每卡 ≤30 KB / ≤200 元素）。
+
+    返回 ``[(fallback_text, card_json), ...]``：
+    - ``fallback_text`` 是该段成员的**文本版渲染**（``render_process_group``），
+      发送层在卡片失败时回落到它——保证「不丢信息」（V5）；
+    - ``card_json`` 是 2.0 折叠卡；续卡（第 2 张起）重复折叠面板标题并标注「续」。
+
+    切分只发生在成员边界（不会把一条步骤行劈成两半）；单个成员自身即超预算时由
+    ``_trim_card_to_budget`` 兜底裁剪并告警。
+    """
+    member_list = list(members)
+    if not member_list:
+        return []
+    mode = level if level in LIVE_DETAIL_MODES else "detailed"
+
+    chunks: list = []
+    cur: list = []
+    for member in member_list:
+        trial = cur + [member]
+        if cur and not _card_chunk_fits(trial, mode, len(chunks) + 1):
+            chunks.append(cur)
+            cur = [member]
+        else:
+            cur = trial
+    if cur:
+        chunks.append(cur)
+
+    out: list = []
+    for index, chunk in enumerate(chunks):
+        card = render_process_group_card(
+            chunk, mode, card_index=index + 1, continued=index > 0
+        )
+        if _card_bytes(card) > _CARD_MAX_BYTES:
+            card = _trim_card_to_budget(card)
+        out.append((render_process_group(chunk, mode), card))
+    return out
+
+
+def resolve_card_mode(value: Any) -> Optional[str]:
+    """把 ``collector.card`` 配置解析为 ``None``（关）或 ``"panel"``（折叠卡）。
+
+    未配置 / 非法值一律回落 ``off``（默认关，灰度用）。``"on"``/``"true"`` 这类
+    宽松值按 ``panel`` 处理，避免配置手误导致能力静默失效。
+    """
+    text = str(value if value is not None else DEFAULT_CARD).strip().lower()
+    if text in ("panel", "on", "true", "1", "yes"):
+        return "panel"
+    return None
+
 
 
 def dsh_duration_text(seconds: float) -> str:
@@ -920,9 +1184,16 @@ class Throttler:
     - 全局限速：相邻两次 send 至少间隔 ``min_interval`` 秒（默认 2.0）；不足则等待。
     """
 
-    def __init__(self, min_interval: float = 2.0, level: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        min_interval: float = 2.0,
+        level: Optional[str] = None,
+        card: Any = None,
+    ) -> None:
         self.min_interval = float(min_interval)
         self.level = level if level in LIVE_DETAIL_MODES else None
+        # collector.card：None（off，默认）→ 纯文本行；"panel" → 2.0 折叠卡。
+        self.card = resolve_card_mode(card)
         self._last_send = 0.0
         self._text_buf: list = []
         # 过程组缓冲（四档统一）：按发生顺序累积组内成员（步骤 / 思考）。
@@ -973,13 +1244,25 @@ class Throttler:
         elif etype == "thinking":
             self._members.append({"kind": "think", "text": str(event.get("text") or "")})
 
-    def _flush_process_group(self) -> Optional[str]:
-        """收口当前过程组为一条 dsh 形态消息；空组（无工具且无思考）返回 None。"""
+    def _flush_process_group(self) -> list:
+        """收口当前过程组，返回**应发出的外发件列表**（文本 ``str`` 或 ``CardMessage``）。
+
+        纯文本模式（``collector.card=off``，默认）恒为 0 或 1 项；卡片模式按
+        30 KB / 200 元素预算可能切成多张卡——每张都是 ``CardMessage``：内容为
+        **文本回退层**（卡片发送失败时回落它，不丢信息），``.card`` 为卡片 JSON。
+        """
         if not self._members:
-            return None
-        body = render_process_group(self._members, self.level)
+            return []
+        members = self._members
         self._members = []
-        return body if body.strip() else None
+        if self.card == "panel":
+            return [
+                CardMessage(text, card)
+                for text, card in _split_card_chunks(members, self.level)
+                if text.strip()
+            ]
+        body = render_process_group(members, self.level)
+        return [body] if body.strip() else []
 
     def _close_line(self, reason: Any = "completed") -> Optional[str]:
         """生成收束行（一轮最多一条）：turn_end 优先，终态 status 只在未发时兜底。"""
@@ -1015,17 +1298,13 @@ class Throttler:
             self._buffer_process_event(event)
         elif etype == "turn_start":
             # 轮次切换：先收口上一轮过程组，再进入新一轮计时。
-            group = self._flush_process_group()
-            if group:
-                candidates.append(group)
+            candidates.extend(self._flush_process_group())
             self._turn_started = time.monotonic()
             self._closer_sent = False
         elif etype == "text":
             if event.get("final"):
                 # 防御性收口：final 文本到达时残存过程组先收口，再发最终文本。
-                group = self._flush_process_group()
-                if group:
-                    candidates.append(group)
+                candidates.extend(self._flush_process_group())
                 if line:
                     candidates.append(line)
             else:
@@ -1038,17 +1317,13 @@ class Throttler:
                 # 同一条，于是「工具→叙述→工具→叙述」得到 2 组 + 2 段叙述。
                 # 无待收口组时沿用「低信号 text 累积」语义：连续叙述不会被拆成多条。
                 if self._members:
-                    group = self._flush_process_group()
-                    if group:
-                        candidates.append(group)
+                    candidates.extend(self._flush_process_group())
                     flushed = self._flush_text()
                     if flushed:
                         candidates.append(flushed)
         elif etype == "turn_end":
-            # turn_end：过程组 → 叙述文本 → 收束行（带时长）。
-            group = self._flush_process_group()
-            if group:
-                candidates.append(group)
+            # turn_end：收口残余组 → 收束行（残余叙述兜底 flush，不丢信息）。
+            candidates.extend(self._flush_process_group())
             flushed = self._flush_text()
             if flushed:
                 candidates.append(flushed)
@@ -1058,10 +1333,8 @@ class Throttler:
         elif etype == "status":
             state = event.get("state")
             if state in _TERMINAL_STATES:
-                # 终态强制收口：过程组 → 叙述文本 → 收束行（turn_end 已发则不重复）。
-                group = self._flush_process_group()
-                if group:
-                    candidates.append(group)
+                # 终态强制收口：残余组 → 残余叙述 → 收束行（turn_end 已发则不重复）。
+                candidates.extend(self._flush_process_group())
                 flushed = self._flush_text()
                 if flushed:
                     candidates.append(flushed)
@@ -1120,7 +1393,13 @@ def make_sender(ctx: Any = None) -> Callable[[str, str, str, str], Dict[str, Any
     参与发送。返回结构化 dict，永不抛异常进上层。
     """
 
-    def send(platform: str, chat_id: str, thread_id: str, text: str) -> Dict[str, Any]:
+    def send(
+        platform: str,
+        chat_id: str,
+        thread_id: str,
+        text: str,
+        card: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         redacted = _redact(text)
         target = _target(platform, chat_id, thread_id)
         # 长文本（>8000）按换行边界分块发送；分块间由分块函数追加「⏩ 续」分隔提示。
@@ -1134,36 +1413,82 @@ def make_sender(ctx: Any = None) -> Callable[[str, str, str, str], Dict[str, Any
 
             runner = _gateway_runner_ref()
             if runner is None:
-                return {"ok": False, "error": "no_gateway", "text": redacted, "target": target}
+                return {"ok": False, "error": "no_gateway", "text": redacted,
+                        "target": target, "message_id": None}
             loop = getattr(runner, "_gateway_loop", None)
             if loop is None:
-                return {"ok": False, "error": "no_loop", "text": redacted, "target": target}
+                return {"ok": False, "error": "no_loop", "text": redacted,
+                        "target": target, "message_id": None}
             try:
                 adapter = runner.adapters.get(Platform(platform))
             except Exception:
                 adapter = None
             if adapter is None:
-                return {"ok": False, "error": "no_adapter", "text": redacted, "target": target}
+                return {"ok": False, "error": "no_adapter", "text": redacted,
+                        "target": target, "message_id": None}
             metadata = {"thread_id": thread_id} if thread_id else None
 
-            last: Dict[str, Any] = {"ok": True, "via": "adapter", "target": target, "text": redacted}
+            # 卡片优先（collector.card=panel 时由 Throttler 挂上 card）：失败**一律回落
+            # 文本行**，绝不因为卡片失败而丢消息（V5 降级链）。适配器缺 send_card
+            # （旧版适配器）同样回落。
+            if card is not None:
+                # 卡片是**增强层**：任何失败（返回失败 / 抛异常 / 适配器无此方法）都
+                # 回落文本行，绝不因卡片失败而丢消息（V5）。故单独 try/except 包住。
+                try:
+                    send_card = getattr(adapter, "send_card", None)
+                    if callable(send_card):
+                        fut = safe_schedule_threadsafe(
+                            send_card(chat_id=chat_id, card=card, metadata=metadata), loop
+                        )
+                        if fut is None:
+                            logger.warning(
+                                "hermes-a2a-bridge: card schedule failed; 回落文本行"
+                            )
+                        else:
+                            result = fut.result(timeout=60)
+                            if getattr(result, "success", False):
+                                return {
+                                    "ok": True,
+                                    "via": "adapter-card",
+                                    "target": target,
+                                    "text": redacted,
+                                    "message_id": getattr(result, "message_id", None),
+                                }
+                            logger.warning(
+                                "hermes-a2a-bridge: card send failed (%s); 回落文本行",
+                                getattr(result, "error", "") or "unknown",
+                            )
+                    else:
+                        logger.warning(
+                            "hermes-a2a-bridge: adapter 无 send_card；回落文本行"
+                        )
+                except Exception as exc:  # 卡片异常不阻断文本回退
+                    logger.warning(
+                        "hermes-a2a-bridge: card send raised (%s); 回落文本行", exc
+                    )
+
+            last: Dict[str, Any] = {"ok": True, "via": "adapter", "target": target,
+                                    "text": redacted, "message_id": None}
             for chunk in chunks:
                 fut = safe_schedule_threadsafe(
                     adapter.send(chat_id=chat_id, content=chunk, metadata=metadata), loop
                 )
                 if fut is None:
-                    return {"ok": False, "error": "schedule_failed", "text": chunk, "target": target}
+                    return {"ok": False, "error": "schedule_failed", "text": chunk,
+                            "target": target, "message_id": None}
                 result = fut.result(timeout=60)
                 if getattr(result, "success", False):
-                    last = {"ok": True, "via": "adapter", "target": target, "text": chunk}
+                    last = {"ok": True, "via": "adapter", "target": target, "text": chunk,
+                            "message_id": getattr(result, "message_id", None)}
                 else:
                     last = {"ok": False, "error": "send_failed",
                             "detail": str(getattr(result, "error", "") or ""),
-                            "text": chunk, "target": target}
+                            "text": chunk, "target": target, "message_id": None}
             return last
         except Exception as exc:
             logger.warning("hermes-a2a-bridge: adapter send failed: %s", exc)
-            return {"ok": False, "error": "send_failed", "text": redacted, "target": target}
+            return {"ok": False, "error": "send_failed", "text": redacted,
+                    "target": target, "message_id": None}
 
     return send
 
@@ -1210,6 +1535,7 @@ def consume_stream(
     events: bool = DEFAULT_EVENTS,
     content: bool = DEFAULT_CONTENT,
     level: Optional[str] = None,
+    card: Any = None,
 ) -> Dict[str, Any]:
     """发 SendStreamingMessage → 解析 → 归一化 → 渲染 → 节流 → 发送，返回统计。
 
@@ -1226,21 +1552,30 @@ def consume_stream(
     （final_text / events_seen / states 仍完整统计，供上层「📬 最终结果送达」使用）。
 
     返回 ``{"final_text": str, "events_seen": int, "messages_sent": int,
-    "states": [...]}``。全程 try/except 兜底，单个事件解析失败不影响整体。
+    "states": [...], "message_ids": [...]}``。全程 try/except 兜底，单个事件解析失败
+    不影响整体。
+
+    ``card`` 为 ``collector.card``：``off``（默认）/ ``panel``。``panel`` 时过程组改发
+    2.0 折叠卡（``render_process_group_card``），**文本行保留为回退层**（卡片发送失败
+    即回落，不丢信息）。两条链（直播 ``_stream_dsh_call`` / 结果送达
+    ``_deliver_final_result``）共用同一个 ``make_sender``，故都具备发卡能力。
     """
     mode = resolve_live_detail(content, level)
+    card_mode = resolve_card_mode(card)
     stats: Dict[str, Any] = {
         "final_text": "",
         "events_seen": 0,
         "messages_sent": 0,
         "states": [],
+        # 发出去的 message_id 列表（plan §4.2 第 1 条：更新类方案的唯一前置）。
+        "message_ids": [],
     }
 
     headers: Dict[str, str] = {"A2A-Version": A2A_PROTOCOL_VERSION}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    throttler = Throttler(min_interval=min_interval, level=mode)
+    throttler = Throttler(min_interval=min_interval, level=mode, card=card_mode)
     try:
         results = iter_sse_data(
             url, _streaming_message_body(message, context_id), headers, timeout
@@ -1259,14 +1594,23 @@ def consume_stream(
                 # render_line / render_process_group 在各自分支处理；叙述流（text）
                 # 与轮次事件照常走 feed，因此这里不再跳过任何事件类型。
                 line = render_line(event, level=mode)
-                for text in throttler.feed(event, line):
-                    res = sender(platform, chat_id, thread_id, text)
+                for item in throttler.feed(event, line):
+                    # 过程组项可能是 ``CardMessage``（带 .card）；叙述 / 收束 / final
+                    # 恒为普通 str。**不改消息语义**：card=None 时调用签名与 v0.7.0 完全
+                    # 一致（4 个位置参数），既有 sender 不受影响。
+                    item_card = getattr(item, "card", None)
+                    if item_card is None:
+                        res = sender(platform, chat_id, thread_id, item)
+                    else:
+                        res = sender(platform, chat_id, thread_id, item, card=item_card)
                     if isinstance(res, dict) and not res.get("ok"):
                         logger.warning(
                             "hermes-a2a-bridge: send not delivered: %s", res.get("error")
                         )
                     else:
                         stats["messages_sent"] += 1
+                    if isinstance(res, dict) and res.get("message_id"):
+                        stats["message_ids"].append(res["message_id"])
             except Exception as exc:  # 单事件失败不影响整体
                 logger.warning(
                     "hermes-a2a-bridge: event %r failed: %s", event, exc

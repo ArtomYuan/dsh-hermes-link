@@ -5,6 +5,61 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.7.2] - 2026-10-12
+
+> ⚠️ **两处变更（均默认关 / 不改变既有默认观感）**：①**组边界**对齐 dsh——出现助手
+> 叙述文本即断组，「工具→叙述→工具→叙述」由「1 组 + 1 段叙述」改为 **2 组 + 2 段
+> 叙述**；②新增 `collector.card`（**默认 `off`**），设为 `panel` 时过程组改发**飞书
+> 卡片 JSON 2.0 折叠面板**（一组一块、默认折叠）。**不新增/不删除/不改动**
+> `enabled` / `events` / `content` / `live_detail` 任何既有键，文本行保留为回退层。
+
+### Fixed
+
+- **组边界（plan §4.1）**：`Throttler.feed` 在非 final 叙述文本到达且**确有过程组待
+  收口**时，**先收口该组再输出该段叙述**；`turn_end` / 终态 status 只做「收口残余组 +
+  收束行」（残余叙述兜底 flush，不丢信息）。无待收口组时叙述仍累积（连续叙述不拆条）。
+  顺带修正一处**顺序倒置**：旧实现把更晚到的 final 文本排在更早的缓冲叙述之前，现按
+  事件到达顺序输出（组 → 叙述 → final → 收束行）。两处既有断言随契约同步更新。
+
+### Added
+
+- **`collector.card`（默认 `off` / `panel`）**：过程组卡片化。新增
+  `render_process_group_card(members, level) -> dict`（2.0 折叠卡）与
+  `_split_card_chunks`（按步骤行边界切卡，每卡 ≤30 KB / ≤200 元素，续卡标注「（续）」）。
+  四档语义与文本版**完全一致**（复用 `_member_row_blocks` → `group_title` /
+  `dsh_tool_title` / `dsh_tool_summary` / `render_turn_close` 同一套文案）；
+  `verbose` 不用面板、`detailed` 为 `expanded:true`。只用【直证】字段；面板标题前缀
+  图标默认不发（其 token 属待实测项 T1）。
+- **发送通路可发卡**：`make_sender` 的 `send(...)` 增可选 `card=` 参数；`consume_stream`
+  增 `card=` 并在统计里带出 `message_ids`。**发送成功 dict 带出 `message_id`**
+  （`_finalize_send_result` 已填充，此前被丢弃）——更新类方案的唯一前置。
+- **降级链**：卡片发送失败 / 抛异常 / 适配器无 `send_card` → 一律**回落为同内容的
+  文本行**（不丢信息，记 warning）。
+- 适配器新增通用 `send_card(chat_id, card, metadata=None) -> SendResult`
+  （`msg_type="interactive"`，复用 `_feishu_send_with_retry`）；既有
+  `_send_interactive_card`（审批链）与连接模式**未改动**。
+
+### Tests
+
+- 新增 `tests/test_card_render.py`（16 例）：V1 结构断言（`schema="2.0"`、层级、
+  `element_id` 全局唯一且 ≤20 字符、逐层字段白名单=仅直证字段）；V3 四档与文本版
+  **逐字对拍**（含与 `E2E-OUTPUT.txt` 同源的黄金对照）。
+- 新增 `tests/test_card_budget.py`（19 例）：V2 预算压测（≤30 KB / ≤200 元素、分卡后
+  文本回退层不丢成员行、单卡容量 compact≥600 / standard 197 / detailed 181 / verbose 183）；
+  V5 降级链（失败/异常/无 `send_card` 三种情形均回落文本且内容不丢）；`collector.card`
+  配置归一化与端到端接线。
+- 新增 `tests/test_group_boundary.py`（8 例）：V4 组边界（2 组 + 2 段叙述、组先于叙述、
+  边界即发、连续叙述不拆条、残余兜底不丢信息、wire 序列输出不变）。
+- 全量测试 **306 例全绿**（v0.7.1 的 263 + 新增 43）。
+
+### Notes
+
+- 本版为 **Phase 1 纯开发**：**不部署**，`collector.card` 默认 `off`，故未开启时观感与
+  v0.7.1 一致（除上述组边界修正）。T1–T5（图标 token 可用性、面板箭头、`notation`
+  字号渲染、移动端/PC 折叠观感、30 KB 卡性能）属**待管理员逐条批准的一次性实测**。
+- 适配器改动在 `~/.hermes/hermes-agent/plugins/platforms/feishu/adapter.py`（+24 行，
+  纯新增），diff 见任务目录 `adapter-send_card.diff`。
+
 ## [0.7.1] - 2026-10-10
 
 > ⚠️ **行为修复（升级前必读）**：修复「`context_id` 无法解析成投递目标时**直播静默、

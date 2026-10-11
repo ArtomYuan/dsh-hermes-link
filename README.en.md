@@ -152,6 +152,21 @@ Both can be toggled or selected from the "A2A live switches" panel
 on the Dashboard "Plugins" page (instant effect) — see
 [CONFIGURATION.en.md](CONFIGURATION.en.md).
 
+## Card streaming (v0.7.2, off by default)
+
+New key `collector.card` (default `off`; every existing key is untouched): when set to
+`panel`, process groups become a **Feishu card JSON 2.0 collapsible panel** — one group,
+one block, collapsed by default — with the four tiers **word-for-word identical** to the
+text version (the same copy algorithms). Each card is ≤30 KB / ≤200 elements; beyond that
+the group is split on step-row boundaries and continuation cards are marked "(续)". The
+card is an enhancement layer: **a failed send always falls back to the same content as
+text rows**, losing nothing. See
+[CONFIGURATION.en.md](CONFIGURATION.en.md), "Card streaming (collector.card, v0.7.2)".
+
+The **group boundary** is fixed as well: assistant narration text now breaks the group (as
+in dsh), so "tool → narration → tool → narration" yields **2 process groups + 2
+narrations** instead of being flattened into one group.
+
 ## Architecture
 
 ![Sequence](assets/sequence-en.png)

@@ -762,6 +762,55 @@ plugins:
 
 When unset it stays `true`, keeping existing deployments' behavior unchanged.
 
+### Card streaming (collector.card, v0.7.2)
+
+Full key path: `plugins.entries.hermes-a2a-bridge.settings.collector.card`.
+
+| Value | Meaning |
+| --- | --- |
+| `off` (default) | process groups are sent as **plain text rows** (the v0.7.0 form — the ultimate fallback layer) |
+| `panel` | process groups become a **Feishu card JSON 2.0 collapsible panel** (one group, one block, collapsed by default) |
+
+```yaml
+# ~/.hermes/config.yaml
+plugins:
+  entries:
+    hermes-a2a-bridge:
+      settings:
+        collector:
+          card: panel      # off (default) / panel
+```
+
+**The four tiers stay semantically identical to the text version** (the same copy
+algorithms are reused: `group_title` / `dsh_tool_title` / `dsh_tool_summary` /
+`render_turn_close`):
+
+| Tier | Card shape |
+| --- | --- |
+| `compact` | collapsible panel, `expanded=false`; only thinking rows inside (step rows are omitted by tier) |
+| `standard` | collapsible panel, `expanded=false` + step rows |
+| `detailed` | collapsible panel, `expanded=true` + step rows + result bodies |
+| `verbose` | **no panel**; member rows laid out flat in `body.elements` (no group header, as in the text version) |
+
+**Split budget**: each card is ≤30 KB / ≤200 elements (official hard limits). Beyond
+that the group is split **on step-row boundaries**, and continuation cards repeat the
+collapsible panel title with a "(续)" mark. Measured single-card capacity on the
+same-source step rows: `standard` ≈197 steps, `detailed` ≈181, `verbose` ≈183;
+`compact` carries no step rows, so its size does not grow with the step count and it
+never splits.
+
+**Degradation chain**: the card is an **enhancement layer** — a failed send, a raised
+exception, or an adapter without `send_card` all **fall back to the same content as
+text rows** (nothing is lost) with a warning in the log. `collector.card` only changes
+the carrier; it does not affect the semantics of `enabled` / `events` / `content` /
+`live_detail`.
+
+**Adapter requirement**: cards go through the Feishu adapter's
+`send_card(chat_id, card, metadata)`; the adapter must be a version that has it (if
+missing, the bridge automatically falls back to text rows — no functional
+interruption). Permissions reuse the existing `im:message`: **no new scope, no app
+version re-release required**.
+
 ### Dashboard visual switches (instant effect)
 
 This plugin ships a Dashboard extension: the "Plugins" page (port 9120) shows an
