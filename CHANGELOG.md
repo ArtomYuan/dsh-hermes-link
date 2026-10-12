@@ -82,8 +82,9 @@
   `_split_card_chunks`（按步骤行边界切卡，每卡 ≤30 KB / ≤200 元素，续卡标注「（续）」）。
   四档语义与文本版**完全一致**（复用 `_member_row_blocks` → `group_title` /
   `dsh_tool_title` / `dsh_tool_summary` / `render_turn_close` 同一套文案）；
-  `verbose` 不用面板、`detailed` 为 `expanded:true`。只用【直证】字段；面板标题前缀
-  图标默认不发（其 token 属待实测项 T1）。
+  `verbose` 不用面板、`detailed` 为 `expanded:true`。只用【直证】字段；面板标题栏
+  右侧箭头图标 `down-small-ccm_outlined`（`icon_position="right"`，T1/T2 真机实测
+  通过后启用）。
 - **发送通路可发卡**：`make_sender` 的 `send(...)` 增可选 `card=` 参数；`consume_stream`
   增 `card=` 并在统计里带出 `message_ids`。**发送成功 dict 带出 `message_id`**
   （`_finalize_send_result` 已填充，此前被丢弃）——更新类方案的唯一前置。
@@ -109,8 +110,9 @@
 ### Notes
 
 - 本版为 **Phase 1 纯开发**：**不部署**，`collector.card` 默认 `off`，故未开启时观感与
-  v0.7.1 一致（除上述组边界修正）。T1–T5（图标 token 可用性、面板箭头、`notation`
-  字号渲染、移动端/PC 折叠观感、30 KB 卡性能）属**待管理员逐条批准的一次性实测**。
+  v0.7.1 一致（除上述组边界修正）。**T1/T2（图标 token 可用性、面板箭头）已真机实测
+  通过并启用（`87e2f2b`）**；T3–T5（`notation` 字号渲染、移动端/PC 折叠观感、30 KB 卡
+  性能）属**待管理员逐条批准的一次性实测**。
 - 适配器改动在 `~/.hermes/hermes-agent/plugins/platforms/feishu/adapter.py`（+24 行，
   纯新增），diff 见任务目录 `adapter-send_card.diff`。
 
