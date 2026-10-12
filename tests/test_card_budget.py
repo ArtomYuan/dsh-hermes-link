@@ -55,6 +55,14 @@ def _scale(n):
     return members
 
 
+def _first_panel(card):
+    """卡片里的首个 ``collapsible_panel``（过程组卡专用；简约卡/结果卡没有）。"""
+    for element in (card.get("body") or {}).get("elements") or []:
+        if element.get("tag") == "collapsible_panel":
+            return element
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 假 gateway / 适配器（沿用 test_consumer 的桩法；不触网、不起服务）
 # ---------------------------------------------------------------------------
@@ -312,6 +320,29 @@ class CardDegradeTest(unittest.TestCase):
         res = _sender_for(adapter)("feishu", "oc_x", "", self.text, card=self.card)
         self.assertEqual(res["message_id"], "om_text")
 
+    def test_result_card_failure_falls_back_to_result_text(self):
+        # v0.7.3 结果卡同样走 V5 降级链：卡片失败 → 回落同内容文本（📬 头行 + 正文）。
+        fallback, card = consumer.split_result_cards(
+            "📬 **dsh 任务完成，结果如下**（用时 7 秒）", "正文第一行\n正文第二行"
+        )[0]
+        adapter = _FakeAdapter(card_mode="fail")
+        res = _sender_for(adapter)("feishu", "oc_x", "", fallback, card=card)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(len(adapter.card_calls), 1, "先尝试过结果卡")
+        self.assertEqual(adapter.text_calls[0]["content"], fallback, "回落内容不得丢信息")
+        self.assertIn("📬", adapter.text_calls[0]["content"])
+        self.assertIn("正文第二行", adapter.text_calls[0]["content"])
+
+    def test_result_card_success_uses_card_path(self):
+        fallback, card = consumer.split_result_cards("📬 头行", "正文")[0]
+        adapter = _FakeAdapter(card_mode="ok")
+        res = _sender_for(adapter)("feishu", "oc_x", "", fallback, card=card)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["via"], "adapter-card")
+        self.assertEqual(res["message_id"], "om_card")
+        self.assertEqual(adapter.card_calls[0]["card"]["schema"], "2.0")
+        self.assertEqual(adapter.text_calls, [], "卡片成功时不得再发文本")
+
 
 # ---------------------------------------------------------------------------
 # collector.card 配置
@@ -371,11 +402,31 @@ class CardConfigTest(unittest.TestCase):
 
     def test_card_panel_sends_cards_for_process_groups(self):
         sent, stats = self._run_stream("panel", self._events())
-        card_items = [(text, card) for text, card in sent if card is not None]
-        self.assertEqual(len(card_items), 1, f"过程组应发一张卡：{sent!r}")
-        self.assertEqual(card_items[0][1]["schema"], "2.0")
+        panels = [
+            (text, card) for text, card in sent
+            if card is not None and _first_panel(card)
+        ]
+        self.assertEqual(len(panels), 1, f"过程组应发一张折叠卡：{sent!r}")
+        self.assertEqual(panels[0][1]["schema"], "2.0")
         # 同一外发件同时带文本回退层（CardMessage 的内容 = 文本版过程组）。
-        self.assertTrue(card_items[0][0].startswith(consumer._GLYPH_GROUP), card_items[0][0])
+        self.assertTrue(panels[0][0].startswith(consumer._GLYPH_GROUP), panels[0][0])
+
+    def test_card_panel_covers_every_dsh_message(self):
+        """v0.7.3：``panel`` 下 dsh 流出的每一条都是卡片（叙述 / 最终文本 / 收束行同样）。"""
+        sent, _ = self._run_stream("panel", self._events())
+        self.assertTrue(sent)
+        self.assertTrue(all(card is not None for _, card in sent), sent)
+        # 该事件序列只有过程组 + 收束行 → 一张折叠卡 + 一张收束小卡。
+        closer = [(text, card) for text, card in sent
+                  if card is not None and not _first_panel(card)]
+        self.assertEqual(len(closer), 1, sent)
+        self.assertTrue(closer[0][0].startswith(consumer._GLYPH_ROW), closer[0][0])
+        self.assertTrue(
+            closer[0][1]["body"]["elements"][0]["element_id"].startswith(
+                f"dsh_{consumer._CARD_FAMILY_CLOSER}"
+            ),
+            closer[0][1],
+        )
 
     def test_stats_carry_message_ids(self):
         _, stats = self._run_stream("off", self._events())

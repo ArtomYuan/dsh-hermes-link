@@ -762,14 +762,14 @@ plugins:
 
 When unset it stays `true`, keeping existing deployments' behavior unchanged.
 
-### Card streaming (collector.card, v0.7.2)
+### Card streaming (collector.card, since v0.7.2; all content as of v0.7.3)
 
 Full key path: `plugins.entries.hermes-a2a-bridge.settings.collector.card`.
 
 | Value | Meaning |
 | --- | --- |
-| `off` (default) | process groups are sent as **plain text rows** (the v0.7.0 form — the ultimate fallback layer) |
-| `panel` | process groups become a **Feishu card JSON 2.0 collapsible panel** (one group, one block, collapsed by default) |
+| `off` (default) | everything goes out as **plain text rows** (the v0.7.0 form — the ultimate fallback layer) |
+| `panel` | **every piece of dsh output is carried by a Feishu card JSON 2.0** (see below; text rows remain the fallback layer) |
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -781,21 +781,36 @@ plugins:
           card: panel      # off (default) / panel
 ```
 
+**What `panel` carries (v0.7.3: all dsh content becomes cards)**:
+
+| dsh output | Card shape | Builder |
+| --- | --- | --- |
+| Process group (tool calls / results / thinking) | 2.0 **collapsible panel** (one group, one block, collapsed by default) | `render_process_group_card` |
+| Assistant narrative (accumulated low-signal text) | **Narrative card**: no panel, no title, a single markdown element | `render_plain_card` |
+| Live-path final text | **Plain card** (same shape as the narrative card) | `render_plain_card` |
+| Turn-close row (`▸ 已完成，用时 N 秒`) | **Close card** (same shape, single row) | `render_plain_card` |
+| Final result (📬 title + body) | **Result card**: first element is the 📬 head row, then the body; an oversized body is split into continuation cards on line boundaries | `split_result_cards` |
+
+Hermes' own messages (relayed text / system notices) **never pass through this
+plugin** and keep their plain format.
+
 **The four tiers stay semantically identical to the text version** (the same copy
 algorithms are reused: `group_title` / `dsh_tool_title` / `dsh_tool_summary` /
 `render_turn_close`):
 
-| Tier | Card shape |
+| Tier | Process-group card shape |
 | --- | --- |
 | `compact` | collapsible panel, `expanded=false`; only thinking rows inside (step rows are omitted by tier) |
 | `standard` | collapsible panel, `expanded=false` + step rows |
 | `detailed` | collapsible panel, `expanded=true` + step rows + result bodies |
 | `verbose` | **no panel**; member rows laid out flat in `body.elements` (no group header, as in the text version) |
 
-**Split budget**: each card is ≤30 KB / ≤200 elements (official hard limits). Beyond
-that the group is split **on step-row boundaries**, and continuation cards repeat the
-collapsible panel title with a "(续)" mark. Measured single-card capacity on the
-same-source step rows: `standard` ≈197 steps, `detailed` ≈181, `verbose` ≈183;
+**Split budget**: each card is ≤30 KB / ≤200 elements (official hard limits). An
+oversized process group is split **on step-row boundaries**, and continuation cards
+repeat the collapsible panel title with a "(续)" mark; plain / result cards are split
+**on line boundaries** (a single over-long line is hard-split by characters), with a
+"⏩ 续" marker at the end of every non-final card. Measured single-card capacity on the
+same-source step rows: `standard` ≈196 steps, `detailed` ≈180, `verbose` ≈183;
 `compact` carries no step rows, so its size does not grow with the step count and it
 never splits.
 
@@ -803,7 +818,8 @@ never splits.
 exception, or an adapter without `send_card` all **fall back to the same content as
 text rows** (nothing is lost) with a warning in the log. `collector.card` only changes
 the carrier; it does not affect the semantics of `enabled` / `events` / `content` /
-`live_detail`.
+`live_detail`, and with `off` all three paths (process group / narrative / result) go
+back to the plain v0.7.0 forms.
 
 **Adapter requirement**: cards go through the Feishu adapter's
 `send_card(chat_id, card, metadata)`; the adapter must be a version that has it (if

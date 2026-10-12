@@ -5,6 +5,60 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.7.3] - 2026-10-12
+
+> ⚠️ **改动仅作用于 `collector.card=panel`（默认仍 `off`）**：dsh 流出的**全部内容**改由
+> 卡片承载——过程组保持折叠卡不变，新增**叙述卡**、**收束小卡**与**结果卡**。
+> `off`（默认）时三条通路都退回 v0.7.0 的纯文本形态，**文本序列逐字不变**（有测试锁定）。
+> 不新增 / 不删除 / 不改动任何配置键；Hermes 自身消息不经本插件、不受影响。
+
+### Added
+
+- **叙述卡**（`render_plain_card`，family `n`）：低信号叙述文本（`Throttler._flush_text`
+  的内容）在 `panel` 下改由**无折叠、无标题**的 2.0 简约卡承载（单个 markdown 元素，
+  不发 `text_size` = 默认正文字号，区别于过程组成员行的 `notation`）。
+  **截断口径不变**（standard/detailed 仍 120 字，verbose 不截断）——降噪项不放大。
+- **直播最终文本卡**（family `f`）：`render_line` 产出的 final 文本在 `panel` 下同样由
+  简约卡承载，不再以普通 post/text 消息直发。
+- **收束小卡**（family `t`）：`render_turn_close` 的收束行（`▸ 已完成，用时 N 秒`）在
+  `panel` 下改由简约卡承载。状态与用时同时并入结果卡的 📬 头行——**两条链路各自取数、
+  互不耦合**（直播链路不感知结果送达链路）。
+- **结果卡**（`split_result_cards`）：`_deliver_final_result` 在 `panel` 下把
+  「📬 头行 + 正文」拆成**首元素=头行、次元素=正文**的 2.0 卡；正文超预算按行切续卡，
+  续卡不重复头行。头行文案由新增的 `_format_result_parts` 提供**唯一实现**，
+  `_format_result_message`（文本回退层）与卡片共用它 ⇒ 卡片态与文本态**逐字同源**。
+- **简约卡分卡**（`split_plain_card_chunks` / `_take_plain_prefix`）：按**行边界**切卡，
+  单行自身超预算时按字符二分硬切；判定一律走 `_card_bytes`（UTF-8 真实字节数），
+  每卡 ≤30 KB / ≤200 元素，非末卡末尾追加「⏩ 续」（与文本分块同源，常量化
+  `_PLAIN_CONT_MARK`）。
+
+### Changed
+
+- `resolve_card_mode` / `collector.card=panel` 的语义从「过程组卡片化」扩展为
+  **「dsh 全内容卡片化」**；`consume_stream` 的 `card` 文档、`Throttler` 说明同步更新。
+- `_deliver_final_result` 增可选 `card=`（由 `_stream_dsh_call` 在任务开始时读一次传入）；
+  **缺省 `None` = 纯文本路径，行为与 v0.7.2 完全一致**（既有 6 参调用签名兼容）。
+
+### Tests
+
+- 新增 `tests/test_card_content.py`（22 例）：C1 简约卡结构（2.0 / 无面板 / 无 header /
+  仅直证字段 / element_id 唯一且有界）、C2 分卡预算与回退层不丢信息（含 60 KB 单行硬切、
+  结果卡头行仅首卡）、C3 直播接线（`panel` 下叙述/final/收束行全部为卡；`off` 与 `panel`
+  文本序列**逐字相等**）、C4 结果送达（结果卡 / 空正文 / 超长切卡 / `card=None` 兼容 /
+  失败重试一次）。
+- `tests/test_card_budget.py`：新增 3 例（`panel` 全面卡片化、结果卡走卡片通路、结果卡
+  失败回落文本），并更新「过程组应发一张折叠卡」的断言（收束行现在也是卡）。
+- 全量测试 **331 例全绿**（v0.7.2 的 306 + 新增 25）。
+- 顺带修正 `CONFIGURATION.md` / `CONFIGURATION.en.md` 里过期的单卡容量实测值
+  （`standard` 197→196、`detailed` 181→180，改值来自本次复测，非行为变化）。
+
+### Notes
+
+- 本版为 **纯开发**：**不部署、不重启网关、不发真实飞书测试消息**；运行副本仍为 v0.7.2，
+  `collector.card` 在 `~/.hermes/config.yaml` 中为 `panel`，故**升级需在宿主侧重启网关后**
+  才能看到新形态（重启由宿主侧执行）。
+- 过程组卡片行为不变（`render_process_group_card` 未改动；四档语义与文本版仍逐字同源）。
+
 ## [0.7.2] - 2026-10-12
 
 > ⚠️ **两处变更（均默认关 / 不改变既有默认观感）**：①**组边界**对齐 dsh——出现助手

@@ -467,9 +467,10 @@ def _stream_dsh_call(message: str, context_id: str) -> str:
     header += "]"
 
     # 结果主动送达：任务完成即把最终结果推回消息面（「完成」之后不静默）。
+    # card（collector.card，任务开始时读一次）为 panel 时改发**结果卡**，否则文本。
     if platform and chat_id:
         _deliver_final_result(
-            platform, chat_id, thread_id, final_text, state, started_at
+            platform, chat_id, thread_id, final_text, state, started_at, card
         )
 
     return f"{header}\n{final_text or '(no text reply)'}"
@@ -482,13 +483,13 @@ _STATE_ZH = {
 }
 
 
-def _format_result_message(final_text: str, state: str, elapsed_secs: float) -> str:
-    """构造「任务结果」主动送达消息：📬 头行（状态 + 耗时）+ 结果全文（**普通文本**）。
+def _format_result_parts(final_text: str, state: str, elapsed_secs: float) -> tuple:
+    """把「任务结果」拆成 ``(head, body)``：📬 头行（状态 + 耗时）与结果正文。
 
-    头行与正文都是普通 markdown（保留正文自带的 markdown 渲染，**不再包代码框 /
-    围栏**），与 dsh 客户端「回复即正文」的形态一致：状态 / 耗时是元信息，正文是
-    回复本身。正文**不截断**（只剥尾部换行）；超长（>8000）由 sender 的纯文本
-    换行边界分块处理。无文本输出时只有头行、不发空正文。
+    这是头行文案的**唯一实现**：文本回退层（``_format_result_message``）与结果卡
+    （``consumer.split_result_cards``）共用它，保证卡片态与文本态**逐字同源**
+    （卡片失败回落文本时，内容与卡片所载完全一致）。无文本输出时 ``body`` 为空串，
+    头行自带「本次无文本输出」说明。正文**不截断**（只剥尾部换行）。
     """
     minutes, seconds = divmod(max(0, int(elapsed_secs)), 60)
     cost = f"{minutes} 分 {seconds} 秒" if minutes else f"{seconds} 秒"
@@ -496,13 +497,30 @@ def _format_result_message(final_text: str, state: str, elapsed_secs: float) -> 
     if not final_text:
         return (
             f"📬 **dsh 任务已结束**（{state_zh or '完成'} · 用时 {cost}）"
-            "——本次无文本输出。"
+            "——本次无文本输出。",
+            "",
         )
     if state and state not in ("completed", ""):
         head = f"📬 **dsh 任务已结束（{state_zh}），输出如下**（用时 {cost}）"
     else:
         head = f"📬 **dsh 任务完成，结果如下**（用时 {cost}）"
-    return f"{head}\n\n{str(final_text).rstrip()}"
+    return head, str(final_text).rstrip()
+
+
+def _format_result_message(final_text: str, state: str, elapsed_secs: float) -> str:
+    """构造「任务结果」主动送达消息的**文本回退层**：📬 头行 + 结果全文（普通文本）。
+
+    头行与正文都是普通 markdown（保留正文自带的 markdown 渲染，**不再包代码框 /
+    围栏**），与 dsh 客户端「回复即正文」的形态一致：状态 / 耗时是元信息，正文是
+    回复本身。正文**不截断**（只剥尾部换行）；超长（>8000）由 sender 的纯文本
+    换行边界分块处理。无文本输出时只有头行、不发空正文。
+
+    v0.7.3 起本函数是卡片态（``collector.card=panel``）的**回落文本**，与结果卡共用
+    ``_format_result_parts``：卡片模式下正文改由结果卡承载，卡片失败时回落的就是这里
+    的文本，内容逐字一致。
+    """
+    head, body = _format_result_parts(final_text, state, elapsed_secs)
+    return f"{head}\n\n{body}" if body else head
 
 
 def _deliver_final_result(
@@ -512,35 +530,53 @@ def _deliver_final_result(
     final_text: str,
     state: str,
     started_at: float,
+    card: Any = None,
 ) -> None:
-    """把任务最终结果以普通文本消息主动送达消息面（失败重试一次，绝不抛出）。"""
+    """把任务最终结果主动送达消息面（失败重试一次，绝不抛出）。
+
+    v0.7.3：``collector.card=panel`` 时改发**结果卡**（📬 头行 + 正文，正文超预算按行
+    切续卡，每张 ≤30 KB / ≤200 元素），每张卡都带同内容的文本回退层；卡片失败 / 适配器
+    无 ``send_card`` / 抛异常 → 回落文本行，绝不丢消息（V5 降级链）。``card`` 由
+    ``_stream_dsh_call`` 传入（任务开始时读一次）；缺省 ``None`` = 纯文本路径，行为与
+    v0.7.2 完全一致。
+    """
     try:
         consumer = _import_consumer()
         sender = consumer.make_sender(_CTX)
     except Exception as exc:
         logger.warning("hermes-a2a-bridge: result sender unavailable: %s", exc)
         return
-    text = _format_result_message(final_text, state, time.time() - started_at)
-    for attempt in (1, 2):
-        try:
-            res = sender(platform, chat_id, thread_id, text)
-        except Exception as exc:
+    elapsed = time.time() - started_at
+    items: list = [(_format_result_message(final_text, state, elapsed), None)]
+    resolve = getattr(consumer, "resolve_card_mode", None)
+    split = getattr(consumer, "split_result_cards", None)
+    if callable(resolve) and callable(split) and resolve(card):
+        head, body = _format_result_parts(final_text, state, elapsed)
+        items = split(head, body) or items
+    for text, item_card in items:
+        for attempt in (1, 2):
+            try:
+                if item_card is None:
+                    res = sender(platform, chat_id, thread_id, text)
+                else:
+                    res = sender(platform, chat_id, thread_id, text, card=item_card)
+            except Exception as exc:
+                logger.warning(
+                    "hermes-a2a-bridge: result delivery raised (attempt %d): %s",
+                    attempt,
+                    exc,
+                )
+                continue
+            if isinstance(res, dict) and res.get("ok"):
+                logger.info(
+                    "hermes-a2a-bridge: final result delivered (%d chars)", len(text)
+                )
+                break
             logger.warning(
-                "hermes-a2a-bridge: result delivery raised (attempt %d): %s",
+                "hermes-a2a-bridge: result delivery failed (attempt %d): %s",
                 attempt,
-                exc,
+                res.get("error") if isinstance(res, dict) else res,
             )
-            continue
-        if isinstance(res, dict) and res.get("ok"):
-            logger.info(
-                "hermes-a2a-bridge: final result delivered (%d chars)", len(text)
-            )
-            return
-        logger.warning(
-            "hermes-a2a-bridge: result delivery failed (attempt %d): %s",
-            attempt,
-            res.get("error") if isinstance(res, dict) else res,
-        )
 
 
 def _stream_worker(message: str, origin: str) -> None:

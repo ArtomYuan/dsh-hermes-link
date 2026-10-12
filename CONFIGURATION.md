@@ -624,14 +624,14 @@ plugins:
 
 未配置时保持 `true`，向后兼容已部署副本的现有行为。
 
-### 卡片直播（collector.card，v0.7.2）
+### 卡片直播（collector.card，v0.7.2 起；v0.7.3 扩到全内容）
 
 完整键路径：`plugins.entries.hermes-a2a-bridge.settings.collector.card`。
 
 | 值 | 含义 |
 | --- | --- |
-| `off`（默认） | 过程组发**纯文本行**（v0.7.0 形态，即终极回退层） |
-| `panel` | 过程组改发**飞书卡片 JSON 2.0 折叠面板**（一组一块，默认折叠） |
+| `off`（默认） | 全部发**纯文本行**（v0.7.0 形态，即终极回退层） |
+| `panel` | **dsh 流出的全部内容改由飞书卡片 JSON 2.0 承载**（见下表；文本行保留为回退层） |
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -643,24 +643,38 @@ plugins:
           card: panel      # off（默认）/ panel
 ```
 
+**`panel` 承载什么（v0.7.3：dsh 全内容卡片化）**：
+
+| dsh 流出内容 | 卡片形态 | builder |
+| --- | --- | --- |
+| 过程组（工具调用 / 结果 / 思考） | 2.0 **折叠面板**（一组一块，默认折叠） | `render_process_group_card` |
+| 助手叙述文本（低信号 text 累积） | **叙述卡**：无折叠、无标题，单个 markdown | `render_plain_card` |
+| 直播路径的 final 文本 | **简约卡**（同叙述卡形态） | `render_plain_card` |
+| 收束行（`▸ 已完成，用时 N 秒`） | **收束小卡**（同简约卡形态，单行） | `render_plain_card` |
+| 最终结果（📬 标题 + 正文） | **结果卡**：首个元素是 📬 头行，其后是正文；正文超预算按行切续卡 | `split_result_cards` |
+
+Hermes 自身的消息（转述 / 系统提示等）**不经本插件**，保持普通格式不变。
+
 **四档语义与文本版完全一致**（同一份文案算法：`group_title` / `dsh_tool_title` /
 `dsh_tool_summary` / `render_turn_close` 全部复用）：
 
-| 档位 | 卡片形态 |
+| 档位 | 过程组卡片形态 |
 | --- | --- |
 | `compact` | 折叠面板、`expanded=false`；面板内只有思考行（步骤行按档位不出） |
 | `standard` | 折叠面板、`expanded=false` + 步骤行 |
 | `detailed` | 折叠面板、`expanded=true` + 步骤行 + 结果体 |
 | `verbose` | **不用面板**，成员行在 `body.elements` 平铺（无组头，同文本版） |
 
-**分卡预算**：每张卡 ≤30 KB / ≤200 元素（官方硬限）。超限时**按步骤行边界**切卡，
-续卡重复折叠面板标题并标注「（续）」。实测单卡容量（同源步骤行）：
-`standard` ≈197 步、`detailed` ≈181 步、`verbose` ≈183 步；`compact` 面板内不含步骤行，
+**分卡预算**：每张卡 ≤30 KB / ≤200 元素（官方硬限）。过程组超限时**按步骤行边界**切卡，
+续卡重复折叠面板标题并标注「（续）」；简约卡 / 结果卡超限时**按行边界**切卡（单行自身
+超限则按字符硬切），非末卡末尾追加「⏩ 续」。实测单卡容量（同源步骤行）：
+`standard` ≈196 步、`detailed` ≈180 步、`verbose` ≈183 步；`compact` 面板内不含步骤行，
 体积与步数无关，故不切卡。
 
 **降级链**：卡片是**增强层**——发送失败 / 抛异常 / 适配器无 `send_card` 时一律
 **回落为同内容的文本行**（不丢信息），并在日志记一条 warning。`collector.card` 只影响
-承载形态，不影响 `enabled` / `events` / `content` / `live_detail` 任何既有语义。
+承载形态，不影响 `enabled` / `events` / `content` / `live_detail` 任何既有语义；`off`
+时三条通路（过程组 / 叙述 / 结果）都退回 v0.7.0 的纯文本形态。
 
 **适配器要求**：发卡走飞书适配器的 `send_card(chat_id, card, metadata)`；适配器需为
 含该方法的新版（缺失即自动回落文本行，功能不中断）。权限复用现有 `im:message`，

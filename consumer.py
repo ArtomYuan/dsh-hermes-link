@@ -400,6 +400,17 @@ _CARD_MAX_ELEMENTS = 200
 # 续卡：重复折叠面板标题并标注「续」（plan §4.2 第 4 条）。
 _CARD_CONT_MARK = "（续）"
 
+# 纯文本分块 / 简约卡续卡的续接提示（同一常量，文本与卡片两态同源）。
+_PLAIN_CONT_MARK = "⏩ 续"
+
+# 简约卡族（v0.7.3）：决定 ``element_id`` 前缀，仅用于卡内唯一性与排障可读。
+#   n = 叙述卡（低信号 text 累积后的叙述）/ f = 直播路径的 final 文本
+#   t = 收束小卡（turn_end / 终态 status 的收束行）/ r = 结果卡（📬 头行 + 正文）
+_CARD_FAMILY_NARRATIVE = "n"
+_CARD_FAMILY_FINAL = "f"
+_CARD_FAMILY_CLOSER = "t"
+_CARD_FAMILY_RESULT = "r"
+
 # 面板标题前缀图标（`standard_icon`）。
 # 2026-10-12 启用：`down-small-ccm_outlined` 经真机实测（T1/T2 通过）可用；
 # 位置/旋转角与实测探头同参数（icon_position="right"、展开旋转 -180）。
@@ -446,12 +457,13 @@ def _card_element_count(card: Dict[str, Any]) -> int:
 
 
 def _split_plain_chunks(
-    content: str, limit: int = 8000, marker: str = "⏩ 续"
+    content: str, limit: int = 8000, marker: str = _PLAIN_CONT_MARK
 ) -> list:
     """把长纯文本按换行边界分块，块间追加 ``marker`` 提示。
 
-    v0.7.0 起直播与结果送达两条路径的正文都不再含代码框，本函数是唯一的分块入口：
-    只需保证每块 ≤ ``limit`` 且块间有分隔提示。
+    v0.7.0 起直播与结果送达两条路径的正文都不再含代码框，本函数是文本回退层唯一的分块
+    入口：只需保证每块 ≤ ``limit`` 且块间有分隔提示。卡片态的分块出口是
+    ``split_plain_card_chunks``（按 30 KB / 200 元素预算，续接提示同源）。
     """
     if len(content) <= limit:
         return [content]
@@ -977,11 +989,191 @@ def _split_card_chunks(
     return out
 
 
+def _plain_markdown_element(
+    family: str, card_index: int, position: int, content: str
+) -> Dict[str, Any]:
+    """简约卡的一个 markdown 元素（只用【直证】字段，**不发** ``text_size``）。
+
+    ``text_size`` 省略 = 卡片默认正文字号；与过程组成员行的 ``notation``（12px 辅助
+    信息）刻意区分：叙述 / 结果 / 收束是正文，不是辅助行。
+    """
+    return {
+        "tag": "markdown",
+        "element_id": f"dsh_{family}{card_index}_e{position}",
+        "content": content,
+    }
+
+
+def render_plain_card(
+    content: Any = "",
+    *,
+    family: str = _CARD_FAMILY_NARRATIVE,
+    card_index: int = 1,
+    lead: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    """渲染**简约卡**：无折叠面板、无标题，``body.elements`` 只有 markdown（v0.7.3）。
+
+    dsh 流出的非过程组内容全部走这里承载：
+
+    - ``family="n"`` 叙述卡（低信号 text 累积后的叙述段）；
+    - ``family="f"`` 直播路径的 final 文本；
+    - ``family="t"`` 收束小卡（``render_turn_close`` 的收束行）；
+    - ``family="r"`` 结果卡：``lead=[📬 头行]`` 先放一个元素，正文再放一个元素。
+
+    只用【直证】字段（``schema`` / ``config.width_mode`` / ``body.elements`` /
+    ``markdown``）：2.0 对未知属性会报错。**不用** ``collapsible_panel``（无折叠）、
+    **不发** ``header``（无标题）。``lead`` 与 ``content`` 都为空时返回 ``{}``
+    （调用方按假值跳过，与 ``render_process_group_card`` 同约定）。
+
+    @param content - 卡片正文（markdown 原文）。
+    @param family - 卡族，决定 ``element_id`` 前缀（n / f / t / r）。
+    @param card_index - 同一段内容切成多张卡时的序号（从 1 起，用于卡内 id 唯一）。
+    @param lead - 正文之前的前置元素文本序列（结果卡的 📬 头行）。
+    @returns 2.0 卡片 JSON；无任何元素时返回 ``{}``。
+    """
+    elements: list = []
+    for text in list(lead or []):
+        if str(text or "").strip():
+            elements.append(
+                _plain_markdown_element(family, card_index, len(elements) + 1, str(text))
+            )
+    body = str(content or "")
+    if body.strip():
+        elements.append(
+            _plain_markdown_element(family, card_index, len(elements) + 1, body)
+        )
+    if not elements:
+        return {}
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "body": {"elements": elements},
+    }
+
+
+def _join_plain_fallback(lead: Optional[Iterable[str]], body: str) -> str:
+    """简约卡的**文本回退层**：前置元素 + 空行 + 正文（结果卡即 ``头行\\n\\n正文``）。"""
+    parts = [str(text) for text in list(lead or []) if str(text or "").strip()]
+    if str(body or "").strip():
+        parts.append(body)
+    return "\n\n".join(parts)
+
+
+def _plain_card_fits(
+    text: str,
+    family: str,
+    card_index: int,
+    more: bool,
+    lead: Optional[Iterable[str]] = None,
+) -> bool:
+    """试探「这些文本放进一张简约卡」是否仍在 30 KB / 200 元素预算内。"""
+    body = text + ("\n" + _PLAIN_CONT_MARK if more else "")
+    card = render_plain_card(body, family=family, card_index=card_index, lead=lead)
+    if not card:
+        return True
+    return (
+        _card_bytes(card) <= _CARD_MAX_BYTES
+        and _card_element_count(card) <= _CARD_MAX_ELEMENTS
+    )
+
+
+def _take_plain_prefix(
+    text: str,
+    family: str,
+    card_index: int,
+    lead: Optional[Iterable[str]] = None,
+) -> tuple:
+    """切出「一张简约卡装得下」的最长前缀，返回 ``(chunk, rest)``。
+
+    优先按**行边界**切（不劈开一行）；某一行自身就超预算时按字符二分硬切，保证
+    ``len(chunk) >= 1``（调用方据此必然收敛）。判定一律走 ``_card_bytes``（UTF-8
+    真实字节数），不为字符数与字节数的差异留隐患。
+    """
+    if _plain_card_fits(text, family, card_index, False, lead):
+        return text, ""
+    lines = text.split("\n")
+    used = 0
+    for index in range(len(lines)):
+        candidate = "\n".join(lines[: index + 1])
+        if not _plain_card_fits(candidate, family, card_index, True, lead):
+            break
+        used = len(candidate)
+    if used:
+        rest = text[used:]
+        return text[:used], rest[1:] if rest.startswith("\n") else rest
+    lo, hi = 1, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _plain_card_fits(text[:mid], family, card_index, True, lead):
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo], text[lo:]
+
+
+def split_plain_card_chunks(
+    content: Any,
+    *,
+    family: str = _CARD_FAMILY_NARRATIVE,
+    lead: Optional[Iterable[str]] = None,
+) -> list:
+    """把一段纯文本切成若干张**简约卡**，返回 ``[(fallback_text, card_json), ...]``。
+
+    每卡 ≤30 KB / ≤200 元素（官方硬限）；切分只发生在行边界，单行超预算时按字符硬切；
+    非末卡末尾追加 ``⏩ 续`` 续接提示（与 ``_split_plain_chunks`` 同源）。
+
+    ``fallback_text`` 是该卡内容的**文本回退层**（``lead`` + 空行 + 卡内正文），发送层
+    在卡片失败时回落它——两态逐字同源，卡片失败绝不丢信息（V5）。
+
+    @param content - 正文（markdown 原文）。
+    @param family - 卡族（n / f / t / r）。
+    @param lead - 仅首卡的 ``lead`` 元素（结果卡的 📬 头行）；续卡不再重复。
+    @returns 卡列表；正文与 ``lead`` 都为空时返回 ``[]``。
+    """
+    text = str(content or "")
+    first_lead = [str(item) for item in list(lead or []) if str(item or "").strip()]
+    if not text.strip() and not first_lead:
+        return []
+    out: list = []
+    rest = text
+    index = 0
+    while True:
+        index += 1
+        chunk, rest = _take_plain_prefix(rest, family, index, first_lead or None)
+        body = chunk + ("\n" + _PLAIN_CONT_MARK if rest else "")
+        card = render_plain_card(body, family=family, card_index=index, lead=first_lead)
+        if card:
+            out.append((_join_plain_fallback(first_lead, body), card))
+        first_lead = []
+        if not rest:
+            break
+    return out
+
+
+def split_result_cards(head: Any, body: Any) -> list:
+    """**结果卡**切分：首卡 = 📬 头行 + 正文首块，正文超预算时按行切续卡（v0.7.3）。
+
+    返回 ``[(fallback_text, card_json), ...]``；``fallback_text`` 与文本回退层
+    ``_format_result_message`` **逐字同源**（首卡 ``头行\\n\\n正文块``、续卡为正文块），
+    卡片失败即回落文本、不丢正文。
+
+    @param head - 📬 头行（状态 + 耗时）。
+    @param body - 结果正文（**不截断**）。
+    @returns 卡列表；``head`` 与 ``body`` 都为空时返回 ``[]``。
+    """
+    return split_plain_card_chunks(body, family=_CARD_FAMILY_RESULT, lead=[head])
+
+
 def resolve_card_mode(value: Any) -> Optional[str]:
-    """把 ``collector.card`` 配置解析为 ``None``（关）或 ``"panel"``（折叠卡）。
+    """把 ``collector.card`` 配置解析为 ``None``（关）或 ``"panel"``（卡片承载）。
 
     未配置 / 非法值一律回落 ``off``（默认关，灰度用）。``"on"``/``"true"`` 这类
     宽松值按 ``panel`` 处理，避免配置手误导致能力静默失效。
+
+    ``panel`` 的含义（v0.7.3 起）：**dsh 流出的全部内容**都用卡片承载——过程组为 2.0
+    折叠卡（``render_process_group_card``），叙述 / 直播最终文本 / 收束行为**简约卡**
+    （``render_plain_card``），最终结果为**结果卡**（``split_result_cards``）。
+    文本行始终保留为回退层；``off`` 时三条通路都退回 v0.7.0 的纯文本形态。
     """
     text = str(value if value is not None else DEFAULT_CARD).strip().lower()
     if text in ("panel", "on", "true", "1", "yes"):
@@ -1174,9 +1366,12 @@ class Throttler:
       累积到 ``turn_end``。无待收口组时叙述仍累积（连续叙述不拆分）。``turn_end`` /
       终态 status 只做「收口残余组 + 收束行」（残余叙述文本兜底 flush，不丢信息）。
     - 低信号 ``text``（非 final）累积为一条普通 markdown 文本（无前缀、无围栏）；
-      在组边界、``turn_end`` 或 status 终态 flush。
+      在组边界、``turn_end`` 或 status 终态 flush。``collector.card=panel`` 时该叙述
+      改由**叙述卡**（``render_plain_card``，无折叠 / 无标题）承载，文本行仍是回退层。
     - 收束行（``render_turn_close``）：``turn_end`` 优先（带时长），否则终态 status
-      兜底；**一轮最多一条**，避免 turn_end 与 status completed 双发。
+      兜底；**一轮最多一条**，避免 turn_end 与 status completed 双发。卡片模式下改由
+      **收束小卡**承载（状态与用时同时并入结果卡的 📬 头行，两条链路各自独立取数）。
+    - 直播路径的 final 文本（``render_line`` 原样返回）在卡片模式下同样改由简约卡承载。
     - 收口时机（沿用）：``turn_end``、终态 status、final text、新 ``turn_start``（上一轮
       未发则先发）；过程组**先于**触发它的叙述 / 收束行发出。终态强制收口（不丢信息）。
     - 发空规则：该轮既无工具步也无思考 → 不发过程组。
@@ -1201,7 +1396,11 @@ class Throttler:
         self._closer_sent = False
 
     def _flush_text(self) -> Optional[str]:
-        """叙述文本行：原样 markdown（无 ``📖`` 前缀、无围栏），非 verbose 截断 120。"""
+        """叙述文本行：原样 markdown（无 ``📖`` 前缀、无围栏），非 verbose 截断 120。
+
+        截断口径（低信号降噪）与 v0.7.0 逐字一致，**不因改卡片而放大**：卡片承载的
+        内容就是本函数的返回值，两态同源。
+        """
         if not self._text_buf:
             return None
         joined = " ".join(self._text_buf).strip()
@@ -1211,6 +1410,30 @@ class Throttler:
         if self.level == "verbose":
             return joined
         return _truncate(joined, 120)
+
+    def _plain_items(self, text: Optional[str], family: str) -> list:
+        """把一段文本包成外发件列表：卡片模式下发简约卡（超预算切多张），否则原样文本。
+
+        ``family`` 见 ``_CARD_FAMILY_*``。卡片失败时发送层回落 ``CardMessage`` 的内容
+        （文本回退层，与卡内文案同源），不丢信息。
+        """
+        if text is None or not str(text).strip():
+            return []
+        if self.card != "panel":
+            return [text]
+        return [
+            CardMessage(fallback, card)
+            for fallback, card in split_plain_card_chunks(text, family=family)
+            if card
+        ]
+
+    def _flush_text_items(self) -> list:
+        """叙述文本外发件（``panel`` → 叙述卡；``off`` → 普通文本行）。"""
+        return self._plain_items(self._flush_text(), _CARD_FAMILY_NARRATIVE)
+
+    def _closer_items(self, reason: Any = "completed") -> list:
+        """收束行外发件（``panel`` → 收束小卡；``off`` → 普通文本行）；一轮最多一条。"""
+        return self._plain_items(self._close_line(reason), _CARD_FAMILY_CLOSER)
 
     def _buffer_process_event(self, event: Dict[str, Any]) -> None:
         """把 tool_call / tool_result / thinking 收进过程组缓冲（四档统一，不逐条发出）。"""
@@ -1303,9 +1526,10 @@ class Throttler:
         elif etype == "text":
             if event.get("final"):
                 # 防御性收口：final 文本到达时残存过程组先收口，再发最终文本。
+                # 卡片模式下 final 文本同样由简约卡承载（文本回退层不变）。
                 candidates.extend(self._flush_process_group())
                 if line:
-                    candidates.append(line)
+                    candidates.extend(self._plain_items(line, _CARD_FAMILY_FINAL))
             else:
                 text = str(event.get("text") or "")
                 if text:
@@ -1317,29 +1541,21 @@ class Throttler:
                 # 无待收口组时沿用「低信号 text 累积」语义：连续叙述不会被拆成多条。
                 if self._members:
                     candidates.extend(self._flush_process_group())
-                    flushed = self._flush_text()
-                    if flushed:
-                        candidates.append(flushed)
+                    candidates.extend(self._flush_text_items())
         elif etype == "turn_end":
-            # turn_end：收口残余组 → 收束行（残余叙述兜底 flush，不丢信息）。
+            # turn_end：收口残余组 → 残余叙述（兜底 flush，不丢信息）→ 收束行。
             candidates.extend(self._flush_process_group())
-            flushed = self._flush_text()
-            if flushed:
-                candidates.append(flushed)
-            closer = self._close_line(event.get("reason") or "completed")
-            if closer:
-                candidates.append(closer)
+            candidates.extend(self._flush_text_items())
+            candidates.extend(self._closer_items(event.get("reason") or "completed"))
         elif etype == "status":
             state = event.get("state")
             if state in _TERMINAL_STATES:
                 # 终态强制收口：残余组 → 残余叙述 → 收束行（turn_end 已发则不重复）。
                 candidates.extend(self._flush_process_group())
-                flushed = self._flush_text()
-                if flushed:
-                    candidates.append(flushed)
-                closer = self._close_line(_STATUS_REASON.get(state, "completed"))
-                if closer:
-                    candidates.append(closer)
+                candidates.extend(self._flush_text_items())
+                candidates.extend(
+                    self._closer_items(_STATUS_REASON.get(state, "completed"))
+                )
             # working / submitted：不产生行
 
         out: list = []
@@ -1554,10 +1770,12 @@ def consume_stream(
     "states": [...], "message_ids": [...]}``。全程 try/except 兜底，单个事件解析失败
     不影响整体。
 
-    ``card`` 为 ``collector.card``：``off``（默认）/ ``panel``。``panel`` 时过程组改发
-    2.0 折叠卡（``render_process_group_card``），**文本行保留为回退层**（卡片发送失败
-    即回落，不丢信息）。两条链（直播 ``_stream_dsh_call`` / 结果送达
-    ``_deliver_final_result``）共用同一个 ``make_sender``，故都具备发卡能力。
+    ``card`` 为 ``collector.card``：``off``（默认）/ ``panel``。``panel`` 时 **dsh 流出的
+    全部内容**都改由卡片承载（过程组 2.0 折叠卡 ``render_process_group_card``；叙述 /
+    直播 final 文本 / 收束行为简约卡 ``render_plain_card``；最终结果的结果卡在
+    ``_deliver_final_result`` 侧，与本函数共用同一 ``make_sender``），**文本行一律保留为
+    回退层**（卡片发送失败即回落，不丢信息）。两条链（直播 ``_stream_dsh_call`` / 结果
+    送达 ``_deliver_final_result``）共用同一个 ``make_sender``，故都具备发卡能力。
     """
     mode = resolve_live_detail(content, level)
     card_mode = resolve_card_mode(card)
