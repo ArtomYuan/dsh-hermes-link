@@ -401,11 +401,10 @@ _CARD_MAX_ELEMENTS = 200
 _CARD_CONT_MARK = "（续）"
 
 # 面板标题前缀图标（`standard_icon`）。
-# **默认 None = 不发图标**：官方折叠面板示例用的 token `down-small-ccm_outlined`
-# **不在图标库导出清单里**（plan §2.2），其可用性属 T1「待实测」。按 V1「只用直证
-# 字段」的口径，Phase 1 不把它放进默认路径——组头视觉锚点由标题文本里的 `⌄`
-# 承担（与文本版逐字同源）。T1/T2 通过后把此常量设为 token 即可启用。
-_CARD_PANEL_ICON_TOKEN: Optional[str] = None
+# 2026-10-12 启用：`down-small-ccm_outlined` 经真机实测（T1/T2 通过）可用；
+# 位置/旋转角与实测探头同参数（icon_position="right"、展开旋转 -180）。
+# 标题文本里的 `⌄` 锚点保留（与文本版逐字同源，V3 对拍不变）。
+_CARD_PANEL_ICON_TOKEN: Optional[str] = "down-small-ccm_outlined"
 
 _CARD_ROW_TEXT_SIZE = "notation"  # 面板内成员行字号：notation = 辅助信息 12px（【直证】）
 
@@ -879,7 +878,7 @@ def render_process_group_card(
             "token": _CARD_PANEL_ICON_TOKEN,
             "size": "16px 16px",
         }
-        header["icon_position"] = "follow_text"
+        header["icon_position"] = "right"
         header["icon_expanded_angle"] = -180
     panel = {
         "tag": "collapsible_panel",
