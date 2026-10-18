@@ -1,0 +1,911 @@
+"""hermes-a2a-bridge — Hermes 侧接入 dsh A2A server 的桥插件.
+
+背景
+----
+Hermes 内置 A2A 插件（``~/.hermes/hermes-agent/plugins/platforms/a2a/``）向 agent
+暴露 5 个 outbound client 工具（裸名，无命名空间前缀）：
+
+- ``a2a_discover(url)`` — 无 context_id
+- ``a2a_call(agent, message, context_id?)`` — context_id 可选
+- ``a2a_list()`` — 无 context_id
+- ``a2a_history(context_id, limit?)`` — context_id 必需（召回既有会话的键）
+- ``a2a_orchestrate(capability, message, mode?, context_id?)`` — context_id 可选
+
+其中只有「发任务且 context_id 可选」的工具——``a2a_call`` 与 ``a2a_orchestrate``——
+需要注入会话令牌；``a2a_history`` 的 context_id 是召回既有会话的键（语义不同），
+``a2a_discover`` / ``a2a_list`` 无 context_id，均不注入。
+
+本插件在工具调用前（``pre_tool_call``）浅合并注入一个稳定、不透明的 context_id 字段：
+
+    {platform}/{chat_id}[/{thread_id}]
+
+例如飞书群会话 ``feishu/oc_xxxx/omt_xxxx``（在话题线程内）或
+``feishu/oc_xxxx``（顶层消息，无 thread_id）。dsh 的 A2A server 不解析该令牌，只要求
+同对话稳定、异对话不同即可，用于把「一个 Hermes 对话 session ↔ 一个 dsh 会话」的
+上下文连续性落到 contextId 上。
+
+行为边界
+--------
+- 门控：仅 ``session_is_messaging_surface()`` 为真时注入。CLI / TUI / desktop /
+  cron / kanban / api_server / webhook 等非消息面一律不注入。
+- 范围：仅 ``a2a_call`` 与 ``a2a_orchestrate`` 两个工具；其余工具不动。
+- 显式优先：若调用方已显式传入非空 ``context_id`` 或 ``contextId``（别名），该值被
+  采用为直播 origin（不覆盖调用方意图）；非直播路径（collector 关 / 非 dsh /
+  ``a2a_orchestrate``）仍不覆盖调用方 context。
+- 目标解析加固（2026-10-10）：``context_id`` 会先经 ``_normalize_origin_token`` 归一化。
+  标准斜杠形态 ``feishu/oc_x/omt_y`` 直通；拼接形态 ``feishuoc_xomt_y`` /
+  ``feishuoc_x`` / ``oc_xomt_y``（``a2a_list`` 展示的持久化会话名）还原为斜杠形态。
+  **解析不出 platform+chat_id 时大声 ``logger.warning``，且受理回执不再承诺
+  「直播中、自动送达」，而是显式警告「本次不直播、结果仅落工作区」**——杜绝
+  2026-10-10 03:55:32 那类「直播静默 + 幽灵承诺」。
+- 故障放行：任何 import 失败 / 异常都 return None（不阻断工具调用），仅 logging.warning 记录。
+- 默认关：本插件不在 ``plugins.enabled`` 白名单时不会被加载，故「未启用即无副作用」。
+  启用方式见 README.md。
+
+单执行（pre_tool_call hook，异步版）
+--------------------------------------------------
+早期方案用 ``register_tool(override=True)`` 覆写 ``a2a_call`` handler 为单一流式，但
+实证发现 override 注册机制在真实 gateway 里不可靠（a2a 平台 deferred load 二次
+register_tools 会把 override 覆写回原 handler，或 replacement_coordinator 生命周期
+回滚），真实 dispatch 仍走原 a2a_call handler。故弃用 override，改在 ``pre_tool_call``
+hook 里对 dsh 目标做**单执行**：
+
+- 触发条件：``a2a_call`` + ``_is_dsh_agent(agent)`` + ``collector.enabled`` 开 +
+  origin 非空（显式 context_id 或消息面 origin）+ message 非空。
+- origin 取值：``explicit or _build_origin()``。带显式 ``context_id`` 的调用**不再
+  关闭直播**——显式值被原样采用为 origin（不覆盖调用方意图），因此消息仍落到同一
+  dsh 会话；该调用由同步变异步（后台直播 + 受理回执 + 结果自动送达）。
+- 单执行（异步，2026-09-15 改）：hook 立即 spawn 后台 daemon 线程跑
+  ``_stream_dsh_call``（发 ``SendStreamingMessage``、消费 SSE 直播），并立刻以
+  ``{"action": "block", "message": 受理回执}`` 阻止原 ``a2a_call`` 执行（消除双执行）。
+  必须异步的原因：框架 hook 回调超时 30s，超时即 fail-closed 且其后一段时间内
+  所有工具调用被连锁跳过（历史缺陷，2026-09-15 修复）。
+- 结果送达：``_stream_dsh_call`` 在任务完成时把最终结果主动送达消息面
+  ——``📬 **dsh 任务完成，结果如下**（用时 …）`` 头行 + **普通文本正文**（不截断、
+  不包代码框；正文自带 markdown 照常渲染，超长按换行边界分块），失败重试
+  一次后仅记日志——「完成」之后不静默。
+- 回退：spawn 失败时退化为注入 origin 让原 ``a2a_call`` 走同步 ``SendMessage``
+  （功能不丢、无直播）。
+- 其余（``a2a_orchestrate`` / 非 dsh 目标 / collector 关 / 非消息面 / message 空）：
+  仅注入 origin 或放行（显式 context_id 时不覆盖）。
+"""
+
+import logging
+import re
+import sys
+import threading
+import time
+from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Hermes 内置 A2A 插件注册的 client 工具裸名（无命名空间前缀，与 MCP 的
+# mcp__harness_plugin__agent_run 风格不同）。仅「发任务且 context_id 可选」的
+# 两个工具需要注入；a2a_history 的 context_id 是召回键、a2a_discover/a2a_list
+# 无 context_id，均不注入。
+_TARGET_TOOLS = frozenset(
+    {
+        "a2a_call",
+        "a2a_orchestrate",
+    }
+)
+
+# 拼接形态 context_id 的还原规则：``[<platform>]oc_<id>[omt_<id>]``。
+# platform 前缀惰性匹配（``feishuoc_…`` → platform=feishu、chat=oc_…）；
+# chat 惰性 + thread 可选 + ``$`` 锚点，保证 ``omt_`` 段不会被吞进 chat。
+_ORIGIN_CONCAT_RE = re.compile(
+    r"^(?:(?P<platform>[a-z][a-z0-9_-]*?))?"
+    r"(?P<chat>oc_[0-9A-Za-z]{3,}?)"
+    r"(?:(?P<thread>omt_[0-9A-Za-z]{3,}))?$"
+)
+
+# P2c 直播消费者门控状态：register() 读 ``collector.enabled``（默认关）后写入全局，
+# 作为初始值与无 ``_CTX``（单测/直跑）时的回退值；运行期读取点经 ``_read_switch``
+# 热读（每次 hook/任务都问 ``_CTX.get_config``，Dashboard 改配置即时生效）。
+# ``_CTX`` 保存插件 ctx 引用传给 ``make_sender(_CTX)``（仅为签名兼容，实际发送不再走
+# dispatch_tool，而经 gateway 主 loop 调度 adapter）。
+_COLLECTOR_ENABLED = False
+# 事件流开关：register() 读 ``collector.events``（默认 true）后写入全局；
+# false 时安静模式只推最终结果（中间事件不推）。运行期同样经 ``_read_switch`` 热读。
+_EVENTS = True
+# 内容开关（遗留）：register() 读 ``collector.content``（默认 true）后写入全局；
+# false 时直播只收窄「操作内细节」（tool_call 换摘要、tool_result 只留完成标记），
+# 操作流（text / thinking）与起止标记不受影响。运行期经 ``_read_live_detail`` 参与
+# 档位解析（content=true→detailed / false→standard）；``collector.live_detail`` 显式
+# 设置时优先于 content。
+# 旧键 ``collector.code_blocks`` 已废弃并一律忽略（不读取、不迁移、不当 fallback）。
+_CONTENT = True
+# live_detail 档位配置：register() 读 ``collector.live_detail``（默认 follow-dsh）后写入
+# 全局，作为初始值与无 ``_CTX`` 时的回退值；运行期每次流式任务开始时经
+# ``_read_live_detail`` 解析为四档之一（compact/standard/detailed/verbose，
+# follow-dsh 读 dsh profile patch，失败回落 detailed）。
+_LIVE_DETAIL = "follow-dsh"
+
+# collector.card（v0.7.2 新增）：off（默认，纯文本行）/ panel（2.0 折叠卡）。
+# 与其它 collector 键同节奏：register() 存原始值，每次任务开始经 _read_card_mode 热读。
+_CARD = "off"
+_CTX: Optional[Any] = None
+
+# 直播档位（有序，对齐 dsh TRANSCRIPT_VIEW_MODES / consumer.LIVE_DETAIL_MODES）。
+_LIVE_DETAIL_MODES = ("compact", "standard", "detailed", "verbose")
+
+# ``_read_switch`` 无 ``_CTX`` 回退时用的全局名映射（键 → 模块级全局变量名）。
+_SWITCH_GLOBAL_BY_KEY = {
+    "collector.enabled": "_COLLECTOR_ENABLED",
+    "collector.events": "_EVENTS",
+    "collector.content": "_CONTENT",
+    "collector.live_detail": "_LIVE_DETAIL",
+    "collector.card": "_CARD",
+}
+# consumer 模块缓存（惰性 import，见 _import_consumer）。
+_CONSUMER_MODULE: Optional[Any] = None
+
+
+def _to_bool(value: Any) -> bool:
+    """把 YAML 布尔 / 字符串布尔稳健转为 bool（``"false"`` / ``"0"`` 视为关）。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "on", "enabled"}
+
+
+def _to_level(value: Any) -> Optional[str]:
+    """把 live_detail 档位值归一为四档之一；非法 / None / 非四档返回 None。
+
+    只接受四档字面量（大小写不敏感）；dsh 旧值 ``normal`` / ``expanded`` 的归一由
+    consumer.read_dsh_transcript_view 负责，保证 ``collector.live_detail`` 值域严格。
+    """
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _LIVE_DETAIL_MODES:
+            return text
+    return None
+
+
+def _read_switch_raw(key: str, default: Any) -> Any:
+    """热读一个 collector 配置项，返回**原始值**（不做 bool 归一化）。
+
+    优先 ``_CTX.get_config(key, default)``——Hermes 的 config 读取按
+    ``(mtime_ns, size)`` 签名缓存，每次调用都感知 config.yaml 变更（官方热读通道）。
+    ``_CTX`` 为 None（单测 / 直跑）时回退模块级全局（register() 固化值 / 测试后门）；
+    读取抛错回退传入的 ``default``，绝不阻断工具调用。
+    """
+    if _CTX is not None:
+        try:
+            return _CTX.get_config(key, default)
+        except Exception as exc:  # 读配置失败不阻断工具调用
+            logger.warning("hermes-a2a-bridge: hot-read %s failed: %s", key, exc)
+            return default
+    return globals().get(_SWITCH_GLOBAL_BY_KEY.get(key, ""), default)
+
+
+def _read_switch(key: str, default: bool) -> bool:
+    """热读一个布尔 collector 开关，返回 bool（Dashboard 改 config 后即时生效）。"""
+    return _to_bool(_read_switch_raw(key, default))
+
+
+def _read_live_detail() -> str:
+    """热读 live_detail / content / dsh_home / dsh_profile 并解析为四档之一。
+
+    每次流式任务开始时读一次（与 ``events`` 同节奏）；任务中途改配置不影响进行中任务。
+    解析优先级（见 consumer.resolve_collector_level）：显式 live_detail 四档 >
+    follow-dsh 读文件（失败回落 detailed）> 遗留 content 映射 > 默认。
+    """
+    consumer = _import_consumer()
+    live_detail_raw = _read_switch_raw("collector.live_detail", None)
+    content_raw = _read_switch_raw("collector.content", None)
+    dsh_home = _read_switch_raw("collector.dsh_home", consumer.DSH_HOME_DEFAULT)
+    dsh_profile = _read_switch_raw("collector.dsh_profile", consumer.DSH_PROFILE_DEFAULT)
+    return consumer.resolve_collector_level(
+        live_detail_raw, content_raw, dsh_home, dsh_profile
+    )
+
+
+def _read_card_mode() -> Optional[str]:
+    """读 ``collector.card``（``off``/``panel``，默认 ``off``）并归一化。
+
+    每次流式任务开始时读一次（与 ``events`` / ``live_detail`` 同节奏）：任务中途改
+    配置不影响进行中任务。``off`` → ``None``（纯文本行，回退层）；``panel`` → 折叠卡。
+    不影响 ``enabled`` / ``events`` / ``content`` / ``live_detail`` 任何既有键。
+    """
+    consumer = _import_consumer()
+    default = getattr(consumer, "DEFAULT_CARD", "off")
+    raw = _read_switch_raw("collector.card", default)
+    resolve = getattr(consumer, "resolve_card_mode", None)
+    if not callable(resolve):  # 旧版 consumer / 单测替身：按「关」处理，不阻断调用
+        return None
+    return resolve(raw)
+
+
+def _clean_segment(seg: str) -> str:
+    """去除组件内的分隔符，保证 origin 结构自洽、稳定、可读（dsh 不解析）。"""
+    return seg.replace("/", "-").replace(":", "-").replace("\\", "-")
+
+
+def _build_origin() -> str:
+    """构造稳定 origin 令牌：{platform}/{chat_id}[/{thread_id}].
+
+    仅在 messaging 面且 platform、chat_id 均非空时返回非空字符串；否则返回 ""。
+    import 失败时同样返回 ""（故障放行，不阻断工具调用）。
+    """
+    try:
+        from gateway.session_context import (
+            get_session_env,
+            session_is_messaging_surface,
+        )
+    except Exception as exc:  # 插件故障绝不阻断工具调用
+        logger.warning(
+            "hermes-a2a-bridge: failed to import gateway.session_context: %s", exc
+        )
+        return ""
+
+    if not session_is_messaging_surface():
+        return ""
+
+    platform = get_session_env("HERMES_SESSION_PLATFORM", "").strip()
+    chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "").strip()
+    if not platform or not chat_id:
+        return ""
+
+    thread_id = get_session_env("HERMES_SESSION_THREAD_ID", "").strip()
+
+    parts = [_clean_segment(platform), _clean_segment(chat_id)]
+    if thread_id:
+        parts.append(_clean_segment(thread_id))
+    return "/".join(parts)
+
+
+def _normalize_origin_token(raw: str) -> Tuple[str, str]:
+    """把 context_id 归一化为 ``platform/chat_id[/thread_id]``。
+
+    返回 ``(归一化串, 失败原因)``；失败时归一化串为 ``""``、原因为可读诊断。
+
+    接受的形态（2026-10-10 加固，事故 context_id 见 §背景）：
+      1. **标准斜杠形态** ``feishu/oc_xxx/omt_yyy``、``feishu/oc_xxx`` —— 直通；
+      2. **拼接形态** ``feishuoc_xxxomt_yyy``、``feishuoc_xxx``、``oc_xxxomt_yyy``
+         —— 还原为 ``feishu/oc_xxx/omt_yyy``（无 platform 前缀时补 ``feishu``）。
+         ``a2a_list`` 展示的持久化会话名即这种拼接形态，代理很容易直接拿来当
+         ``context_id``；此前它会让 ``chat_id`` 解析为空、直播与送达静默失效。
+
+    任何其它串（如裸 ``custom_session``）都判为失败，由调用方大声告警并按
+    「不直播、结果仅落工作区」如实回执，不再给出幽灵承诺。
+    """
+    s = (raw or "").strip()
+    if not s:
+        return "", "empty"
+    if "/" in s:
+        parts = s.split("/")
+        if len(parts) not in (2, 3):
+            return "", f"slash form needs 2 or 3 segments, got {len(parts)}"
+        if any(not p.strip() for p in parts):
+            return "", "slash form has an empty segment"
+        return "/".join(p.strip() for p in parts), ""
+    m = _ORIGIN_CONCAT_RE.match(s)
+    if not m:
+        return "", (
+            "not 'platform/chat_id[/thread_id]' and not "
+            "'[platform]oc_<id>[omt_<id>]'"
+        )
+    platform = (m.group("platform") or "feishu").strip()
+    parts = [platform, m.group("chat")]
+    if m.group("thread"):
+        parts.append(m.group("thread"))
+    return "/".join(parts), ""
+
+
+def _dsh_peer() -> Optional[Dict[str, Any]]:
+    """读 ``a2a_agents.dsh`` 配置条目（url / auth / capabilities）；未配置返回 None。"""
+    try:
+        from hermes_cli.config import load_config
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: hermes_cli.config unavailable: %s", exc)
+        return None
+    try:
+        cfg = load_config() or {}
+        peers = cfg.get("a2a_agents") or {}
+        entry = peers.get("dsh")
+        return entry if isinstance(entry, dict) else None
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: failed to read a2a_agents.dsh: %s", exc)
+        return None
+
+
+def _is_dsh_agent(agent: str) -> bool:
+    """判断 agent 标识是否指向 dsh（裸名 ``dsh`` 或 dsh peer 的 url）。"""
+    if not agent:
+        return False
+    if agent.lower() == "dsh":
+        return True
+    peer = _dsh_peer()
+    if peer:
+        url = str(peer.get("url") or "").rstrip("/")
+        if url and agent.rstrip("/") == url:
+            return True
+    return False
+
+
+def _import_consumer():
+    """惰性 import ``consumer`` 模块（优先包内相对导入，直接文件加载时回退绝对路径）。"""
+    global _CONSUMER_MODULE
+    if _CONSUMER_MODULE is not None:
+        return _CONSUMER_MODULE
+    try:
+        from . import consumer as _consumer
+    except (ImportError, ValueError) as exc:
+        logger.debug("hermes-a2a-bridge: relative consumer import failed: %s", exc)
+        import importlib.util
+        import os
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "consumer.py")
+        spec = importlib.util.spec_from_file_location(
+            "hermes_a2a_bridge.consumer", path
+        )
+        _consumer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_consumer)
+    _CONSUMER_MODULE = _consumer
+    return _consumer
+
+
+def _import_qna():
+    """§2.6：qna 模块的唯一取用点（与 consumer 共用同一实例，避免出现两份作答登记表）。"""
+    return _import_consumer()._import_qna()
+
+
+# 已挂过问答回调的平台（幂等；同进程直连，进程内挂一次即可）
+_ASK_HANDLER_REGISTERED: set = set()
+
+
+def _ensure_ask_action_handler(platform: str) -> None:
+    """把 §2.6 的问答卡片处理器挂到平台适配器的注册表上（幂等；失败只告警不阻断直播）。
+
+    方向刻意是**桥 → 适配器**：适配器补丁只提供 ``register_ask_action_handler`` 注册表与
+    派发，绝不反向 import 用户插件——平台插件不被用户插件绑死；桥未挂上时适配器的点击
+    分支只响亮告警并如实换卡，不会伪造成功。
+    """
+    if not platform or platform in _ASK_HANDLER_REGISTERED:
+        return
+    try:
+        from gateway.run import _gateway_runner_ref
+        from gateway.config import Platform
+
+        runner = _gateway_runner_ref()
+        adapter = runner.adapters.get(Platform(platform)) if runner is not None else None
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: 取适配器失败，问答卡回调暂不可挂: %s", exc)
+        return
+    if adapter is None:
+        logger.warning("hermes-a2a-bridge: 未找到 %s 适配器，问答卡回调暂不可挂", platform)
+        return
+    module = sys.modules.get(type(adapter).__module__)
+    if module is None:
+        try:
+            import importlib
+
+            module = importlib.import_module(type(adapter).__module__)
+        except Exception as exc:
+            logger.warning("hermes-a2a-bridge: 定位适配器模块失败（%s）: %s", type(adapter).__module__, exc)
+            return
+    register = getattr(module, "register_ask_action_handler", None)
+    if not callable(register):
+        logger.warning(
+            "hermes-a2a-bridge: 适配器模块 %s 无 register_ask_action_handler"
+            "（问答桥接补丁未打或版本不符）——提问卡将无法回传作答",
+            type(adapter).__module__,
+        )
+        return
+    try:
+        register(_import_qna().handle_card_action)
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: 注册问答卡处理器失败: %s", exc)
+        return
+    _ASK_HANDLER_REGISTERED.add(platform)
+    logger.info("hermes-a2a-bridge: 问答卡回调已挂到 %s 适配器（同进程直连）", platform)
+
+
+# §2.1/§2.4 请求级选项：a2a_call 的透传参数名 → A2A message.metadata 键。
+# 与 consumer 侧同名字面量（两侧有用例锁一致）；服务端 dsh-a2a-server 按同名键读取。
+WORKSPACE_META_KEY = "x-dsh-workspace"
+SANDBOX_META_KEY = "x-dsh-sandbox"
+SANDBOX_TIERS = ("read-only", "workspace-write", "danger-full-access")
+
+
+def _extract_request_meta(args: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    """从 ``a2a_call`` 参数提取工作区 / 沙箱档 → ``(metadata 片段, 错误说明)``。
+
+    缺省＝空片段（现状不动）；**出现即校验**，非法一律返回错误说明由调用方 block——
+    绝不「静默改用默认值」（那会让人以为参数生效了）。
+    """
+    meta: Dict[str, Any] = {}
+    workspace_raw = args.get("workspace")
+    if workspace_raw is not None:
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            return {}, "workspace 必须是非空字符串（工作区名字，或绝对路径）"
+        meta[WORKSPACE_META_KEY] = workspace_raw.strip()
+    sandbox_raw = args.get("sandbox")
+    if sandbox_raw is not None:
+        sandbox = sandbox_raw.strip() if isinstance(sandbox_raw, str) else ""
+        if sandbox not in SANDBOX_TIERS:
+            return {}, (
+                f"未知沙箱档 {sandbox_raw!r}（可选：{' / '.join(SANDBOX_TIERS)}）"
+            )
+        meta[SANDBOX_META_KEY] = sandbox
+    return meta, None
+
+
+def _describe_request_meta(meta: Dict[str, Any]) -> str:
+    """回执里的人读摘要（空片段 → 空串）"""
+    parts = []
+    if WORKSPACE_META_KEY in meta:
+        parts.append(f"工作区={meta[WORKSPACE_META_KEY]}")
+    if SANDBOX_META_KEY in meta:
+        parts.append(f"沙箱={meta[SANDBOX_META_KEY]}")
+    return "、".join(parts)
+
+
+def _coerce_timeout(value: Any, default: float) -> float:
+    """把 peer 配置的 ``timeout`` 转为正数（int/float）；非法 / 缺失 / <=0 回退 ``default``。"""
+    if value is None:
+        return default
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if v <= 0:
+        return default
+    return int(v) if v.is_integer() else v
+
+
+def _stream_dsh_call(
+    message: str, context_id: str, request_meta: Optional[Dict[str, Any]] = None,
+) -> str:
+    """对 dsh 发一条 ``SendStreamingMessage``，边消费 SSE 边直播，返回格式化最终文本。
+
+    仅在 collector 门控 + dsh 目标 + 消息面 origin 非空 + message 非空时由
+    ``_on_pre_tool_call`` 调用。缺 url 或 message 空时抛 ``RuntimeError``（调用方回退
+    注入 origin 走同步 SendMessage）。返回 ``[dsh · context {context_id} · {state}]
+    \\n{final_text}``。
+    """
+    started_at = time.time()
+    peer = _dsh_peer()
+    if peer:
+        url = str(peer.get("url") or "").strip()
+        auth = peer.get("auth") or {}
+        token = str(auth.get("token") or "") if isinstance(auth, dict) else ""
+        timeout_raw = peer.get("timeout")
+    else:
+        url = ""
+        token = ""
+        timeout_raw = None
+    if not url or not message:
+        raise RuntimeError("a2a_agents.dsh not configured")
+
+    # 路由信息从 context_id(origin) 派生，而不是再读 ContextVar。origin 各段已被
+    # _clean_segment 清理过（无 "/"），直接 split("/") 还原。
+    # 加固（2026-10-10）：先归一化拼接形态；归一化后仍切不出 platform+chat_id 时
+    # 大声告警——这正是「直播静默」的原爆点，绝不允许无声失效。
+    normalized, reason = _normalize_origin_token(context_id)
+    if normalized and normalized != context_id:
+        logger.info(
+            "hermes-a2a-bridge: context_id 归一化 %r -> %r", context_id, normalized
+        )
+        context_id = normalized
+    parts = context_id.split("/") if context_id else []
+    platform = parts[0] if len(parts) > 0 else ""
+    chat_id = parts[1] if len(parts) > 1 else ""
+    thread_id = parts[2] if len(parts) > 2 else ""
+
+    live_routable = bool(platform and chat_id)
+    if not live_routable:
+        logger.warning(
+            "hermes-a2a-bridge: context_id 未能得出 platform/chat_id，"
+            "本次直播与结果送达已禁用（任务仍会执行，报告仅落工作区）；"
+            "context_id=%r platform=%r chat_id=%r reason=%s",
+            context_id,
+            platform,
+            chat_id,
+            reason or "slash form missing a segment",
+        )
+
+    consumer = _import_consumer()
+    # 热读事件开关 + live_detail 档位（本任务开始时各读一次，任务中途改配置不影响
+    # 进行中任务，与历史语义一致）。enabled 总开关在 hook 入口已热读。
+    # live_detail 经 _read_live_detail 解析为四档之一（含 follow-dsh 读文件）。
+    events = _read_switch("collector.events", True)
+    level = _read_live_detail()
+    # collector.card（默认 off）：过程组是否改发 2.0 折叠卡；off 时纯文本行（回退层）。
+    card = _read_card_mode()
+    # 仅消息面（platform/chat_id 均非空）才真发送直播；否则 noop sender（已在上面
+    # 告警，不会无声）。
+    # v0.7.0 起直播与结果送达的正文都不含代码框，分块一律走纯文本换行边界。
+    sender = (
+        consumer.make_sender(_CTX)
+        if live_routable
+        else lambda p, c, t, text, card=None: {"ok": True}  # noqa: E731  # 不真实发送
+    )
+    logger.info(
+        "hermes-a2a-bridge: hook stream dsh agent=dsh msg_len=%d context_id=%r "
+        "platform=%s chat_id=%s live=%s",
+        len(message),
+        context_id,
+        platform,
+        chat_id,
+        live_routable,
+    )
+    timeout = _coerce_timeout(timeout_raw, consumer._DEFAULT_TIMEOUT)
+    # §2.6：直播起手前把问答卡片回调挂到适配器（幂等）——提问卡一旦发出，点击就得有归途。
+    if live_routable:
+        _ensure_ask_action_handler(platform)
+    # §2.1/§2.4：请求级选项随首投报文 metadata 带给服务端；缺省不传（保持旧调用形状，
+    # 既有 fake consumer 与既有用例零改动）。
+    consume_kwargs: Dict[str, Any] = {
+        "url": url,
+        "token": token,
+        "message": message,
+        "context_id": context_id,
+        "platform": platform,
+        "chat_id": chat_id,
+        "thread_id": thread_id,
+        "sender": sender,
+        "min_interval": 2.0,
+        "timeout": timeout,
+        "events": events,
+        "level": level,
+        "card": card,
+    }
+    if request_meta:
+        consume_kwargs["extra_metadata"] = request_meta
+    stats = consumer.consume_stream(**consume_kwargs)
+    logger.info(
+        "hermes-a2a-bridge: hook stream consumed events_seen=%s messages_sent=%s "
+        "final_text=%.80r",
+        stats.get("events_seen"),
+        stats.get("messages_sent"),
+        stats.get("final_text") or "",
+    )
+
+    states = stats.get("states") or []
+    state = states[-1] if states else ""
+    final_text = stats.get("final_text") or ""
+    # 终态失败/取消且无正文时，用服务端给的原因顶上——否则线路只看到「无文本输出」，
+    # 非法参数（服务端校验）之类的原因就丢了（2026-10-18 核验指出）。
+    failure_reason = stats.get("failure_reason") or ""
+    if not final_text and failure_reason:
+        final_text = f"⚠️ 任务{('已取消' if state == 'canceled' else '失败')}——原因：{failure_reason}"
+        logger.info("hermes-a2a-bridge: 任务终态无正文，已用服务端失败原因替代正文")
+    header = f"[dsh · context {context_id or '(auto)'}"
+    if state:
+        header += f" · {state}"
+    header += "]"
+
+    # 结果主动送达：任务完成即把最终结果推回消息面（「完成」之后不静默）。
+    # card（collector.card，任务开始时读一次）为 panel 时改发**结果卡**，否则文本。
+    if platform and chat_id:
+        _deliver_final_result(
+            platform, chat_id, thread_id, final_text, state, started_at, card
+        )
+
+    return f"{header}\n{final_text or '(no text reply)'}"
+
+
+_STATE_ZH = {
+    "completed": "完成",
+    "failed": "失败",
+    "canceled": "已取消",
+}
+
+
+def _format_result_parts(final_text: str, state: str, elapsed_secs: float) -> tuple:
+    """把「任务结果」拆成 ``(head, body)``：📬 头行（状态 + 耗时）与结果正文。
+
+    这是头行文案的**唯一实现**：文本回退层（``_format_result_message``）与结果卡
+    （``consumer.split_result_cards``）共用它，保证卡片态与文本态**逐字同源**
+    （卡片失败回落文本时，内容与卡片所载完全一致）。无文本输出时 ``body`` 为空串，
+    头行自带「本次无文本输出」说明。正文**不截断**（只剥尾部换行）。
+    """
+    minutes, seconds = divmod(max(0, int(elapsed_secs)), 60)
+    cost = f"{minutes} 分 {seconds} 秒" if minutes else f"{seconds} 秒"
+    state_zh = _STATE_ZH.get(state, state)
+    if not final_text:
+        return (
+            f"📬 **dsh 任务已结束**（{state_zh or '完成'} · 用时 {cost}）"
+            "——本次无文本输出。",
+            "",
+        )
+    if state and state not in ("completed", ""):
+        head = f"📬 **dsh 任务已结束（{state_zh}），输出如下**（用时 {cost}）"
+    else:
+        head = f"📬 **dsh 任务完成，结果如下**（用时 {cost}）"
+    return head, str(final_text).rstrip()
+
+
+def _format_result_message(final_text: str, state: str, elapsed_secs: float) -> str:
+    """构造「任务结果」主动送达消息的**文本回退层**：📬 头行 + 结果全文（普通文本）。
+
+    头行与正文都是普通 markdown（保留正文自带的 markdown 渲染，**不再包代码框 /
+    围栏**），与 dsh 客户端「回复即正文」的形态一致：状态 / 耗时是元信息，正文是
+    回复本身。正文**不截断**（只剥尾部换行）；超长（>8000）由 sender 的纯文本
+    换行边界分块处理。无文本输出时只有头行、不发空正文。
+
+    v0.7.3 起本函数是卡片态（``collector.card=panel``）的**回落文本**，与结果卡共用
+    ``_format_result_parts``：卡片模式下正文改由结果卡承载，卡片失败时回落的就是这里
+    的文本，内容逐字一致。
+    """
+    head, body = _format_result_parts(final_text, state, elapsed_secs)
+    return f"{head}\n\n{body}" if body else head
+
+
+def _deliver_final_result(
+    platform: str,
+    chat_id: str,
+    thread_id: str,
+    final_text: str,
+    state: str,
+    started_at: float,
+    card: Any = None,
+) -> None:
+    """把任务最终结果主动送达消息面（失败重试一次，绝不抛出）。
+
+    v0.7.3：``collector.card=panel`` 时改发**结果卡**（📬 头行 + 正文，正文超预算按行
+    切续卡，每张 ≤30 KB / ≤200 元素），每张卡都带同内容的文本回退层；卡片失败 / 适配器
+    无 ``send_card`` / 抛异常 → 回落文本行，绝不丢消息（V5 降级链）。``card`` 由
+    ``_stream_dsh_call`` 传入（任务开始时读一次）；缺省 ``None`` = 纯文本路径，行为与
+    v0.7.2 完全一致。
+    """
+    try:
+        consumer = _import_consumer()
+        sender = consumer.make_sender(_CTX)
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: result sender unavailable: %s", exc)
+        return
+    elapsed = time.time() - started_at
+    items: list = [(_format_result_message(final_text, state, elapsed), None)]
+    resolve = getattr(consumer, "resolve_card_mode", None)
+    split = getattr(consumer, "split_result_cards", None)
+    if callable(resolve) and callable(split) and resolve(card):
+        head, body = _format_result_parts(final_text, state, elapsed)
+        items = split(head, body) or items
+    for text, item_card in items:
+        for attempt in (1, 2):
+            try:
+                if item_card is None:
+                    res = sender(platform, chat_id, thread_id, text)
+                else:
+                    res = sender(platform, chat_id, thread_id, text, card=item_card)
+            except Exception as exc:
+                logger.warning(
+                    "hermes-a2a-bridge: result delivery raised (attempt %d): %s",
+                    attempt,
+                    exc,
+                )
+                continue
+            if isinstance(res, dict) and res.get("ok"):
+                logger.info(
+                    "hermes-a2a-bridge: final result delivered (%d chars)", len(text)
+                )
+                break
+            logger.warning(
+                "hermes-a2a-bridge: result delivery failed (attempt %d): %s",
+                attempt,
+                res.get("error") if isinstance(res, dict) else res,
+            )
+
+
+def _stream_worker(
+    message: str, origin: str, request_meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    """后台线程体：跑一次完整流式（直播 + 结果送达），异常只记日志。"""
+    try:
+        if request_meta:
+            _stream_dsh_call(message, origin, request_meta)
+        else:
+            _stream_dsh_call(message, origin)
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: stream worker failed: %s", exc)
+
+
+def _spawn_stream_worker(
+    message: str, origin: str, request_meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    """spawn 后台 daemon 线程跑 ``_stream_worker``（失败向上抛，触发同步回退）。"""
+    thread = threading.Thread(
+        target=_stream_worker,
+        args=(message, origin) if not request_meta else (message, origin, request_meta),
+        name="hermes-a2a-bridge-stream",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _on_pre_tool_call(
+    tool_name: str = "",
+    args: Any = None,
+    **_: Any,
+) -> Optional[Dict[str, Any]]:
+    """pre_tool_call 钩子：origin 注入 + dsh 单执行（block 原 a2a_call）。
+
+    对 dsh 目标的 ``a2a_call``（collector 开 + origin 非空 + message 非空）走单执行：
+    ``_spawn_stream_worker`` 后台直播，随后 ``{"action": "block", "message": 受理回执}``
+    阻止原 a2a_call 执行（消除双执行）。origin 取 ``explicit or _build_origin()``：
+    调用方显式传入的 context_id（或 contextId 别名）不再关闭直播，而是采用为
+    origin（不覆盖调用方意图）。流式失败时回退为仅注入 origin。其余情况
+    （a2a_orchestrate / 非 dsh / collector 关 / 非消息面 / message 空）仅注入 origin
+    或放行（显式 context_id 时不覆盖）。
+
+    目标解析加固（2026-10-10，v0.7.1）：两处 origin 都先经 ``_normalize_origin_token``
+    归一化——拼接形态 ``feishuoc_Xomt_Y`` 还原为 ``feishu/oc_X/omt_Y``，标准斜杠形态
+    直通。解析不出 ``platform+chat_id`` 时 ``logger.warning`` 大声告警，且受理回执
+    **不再承诺**「过程直播中 + 自动送达」，改为显式警告「本次不直播、结果仅落工作区」。
+    解析失败时原串仍作为 origin 采用（「显式优先」不变），只是不再谎称会直播与送达。
+    """
+    if tool_name not in _TARGET_TOOLS:
+        return None
+
+    args = args if isinstance(args, dict) else {}
+
+    # §2.1/§2.4：请求级选项（workspace / sandbox）。出现即校验，非法**立即 block**——
+    # 不静默改用默认值，否则调用方会误以为参数生效了。
+    request_meta, option_error = _extract_request_meta(args)
+    if option_error is not None:
+        logger.warning("hermes-a2a-bridge: a2a 参数不合法，已拒绝投递: %s", option_error)
+        return {
+            "action": "block",
+            "message": f"[a2a] ⚠️ 参数不合法：{option_error}——本次未投递。",
+        }
+
+    # 显式 context_id（或 contextId 别名）：作为直播 origin 采用（不覆盖调用方意图）。
+    explicit_raw = str(args.get("context_id") or args.get("contextId") or "").strip()
+    # 目标解析加固（2026-10-10 直播静默事故）：先归一化，能还原成
+    # platform/chat_id[/thread_id] 就用归一化串（拼接形态也能正确路由）；
+    # 还原不出则大声告警，并在受理回执里如实说明，不再给幽灵承诺。
+    explicit_norm, explicit_reason = _normalize_origin_token(explicit_raw)
+    if explicit_raw and not explicit_norm:
+        logger.warning(
+            "hermes-a2a-bridge: context_id 无法解析出 platform/chat_id，"
+            "本次直播与结果送达将被禁用（任务仍会执行，报告仅落工作区）；"
+            "raw=%r reason=%s",
+            explicit_raw,
+            explicit_reason,
+        )
+    # 解析成功 → 归一化串；失败 → 保留原串（「显式优先、不覆盖调用方意图」不变，
+    # 下游 _stream_dsh_call 会因 chat_id 为空而再次告警）。
+    explicit = explicit_norm or explicit_raw
+
+    # 消息面 origin（非消息面 / platform 或 chat_id 为空时返回 ""）。
+    origin = _build_origin()
+    origin_norm, origin_reason = _normalize_origin_token(origin)
+    if origin and not origin_norm:
+        logger.warning(
+            "hermes-a2a-bridge: 消息面 origin 无法解析出 platform/chat_id，"
+            "本次直播与结果送达将被禁用；raw=%r reason=%s",
+            origin,
+            origin_reason,
+        )
+        origin = ""
+    else:
+        origin = origin_norm or origin
+
+    # 有效 origin：显式优先，否则消息面。带显式 context_id 的调用由同步变异步
+    # （后台直播 + 受理回执 + 结果自动送达），且该 context 被采用。
+    eff_origin = explicit or origin
+    # 目标是否真的可路由：解析出 platform+chat_id 才谈得上「直播 + 送达」。
+    live_target = bool(_normalize_origin_token(eff_origin)[0])
+
+    # 单执行：a2a_call 目标 dsh + collector 开 + origin 非空。
+    # collector.enabled 热读：Dashboard 改配置后下一次工具调用即生效。
+    if (
+        tool_name == "a2a_call"
+        and _read_switch("collector.enabled", False)
+        and eff_origin
+        and _is_dsh_agent(
+            str(args.get("agent") or args.get("agent_name") or args.get("name") or "").strip()
+        )
+    ):
+        message = str(
+            args.get("message") or args.get("text") or args.get("task") or ""
+        ).strip()
+        if message:
+            try:
+                if request_meta:
+                    _spawn_stream_worker(message, eff_origin, request_meta)
+                else:
+                    _spawn_stream_worker(message, eff_origin)
+                # 异步单执行（2026-09-15）：回调秒回受理回执，任务在后台直播 +
+                # 完成后结果自动送达；block 阻止原 a2a_call 执行（消除双执行）。
+                # 回执文案条件化（2026-10-10）：只有目标真能路由时才承诺「直播中 +
+                # 自动送达」；解析失败时如实警告，杜绝幽灵承诺。
+                option_note = _describe_request_meta(request_meta)
+                option_suffix = f"（{option_note}）" if option_note else ""
+                if live_target:
+                    receipt = (
+                        f"[dsh · context {eff_origin}] ⏳ 已受理——任务在后台执行，"
+                        f"过程直播中；完成后结果会自动送达本对话{option_suffix}。"
+                    )
+                else:
+                    # 注意：origin 解析失败**不阻止投递**——工作区/沙箱档由服务端按 metadata
+                    # 生效，只是不直播、结果仅落工作区。故这里如实说明并附选项摘要（核验指出
+                    # 此前该分支既无摘要、又与文档"未生效即 block"的措辞不符）。
+                    receipt = (
+                        f"[dsh · context {eff_origin}] ⚠️ 会话标识无法解析"
+                        f"（未能得出 platform/chat_id：{explicit_reason or origin_reason}），"
+                        f"本次不直播、结果仅落工作区{option_suffix}；"
+                        "工作区/沙箱档参数仍会随 A2A 报文生效。"
+                    )
+                return {"action": "block", "message": receipt}
+            except Exception as exc:
+                logger.warning(
+                    "hermes-a2a-bridge: stream worker spawn failed, fallback sync: %s",
+                    exc,
+                )
+                # 回退：落到下方「仅注入 origin」分支，让原 a2a_call 走同步
+                # SendMessage（功能不丢、无直播）。
+
+    # §2.1/§2.4：带了请求级选项却没走到流式投递（collector 关 / 非 dsh / origin 解析不出 /
+    # message 空 / 非 a2a_call）——**响亮拒绝**，否则调用方会以为工作区/档位已生效。
+    if request_meta:
+        logger.warning(
+            "hermes-a2a-bridge: 请求级选项未被生效路径消费（collector/目标/origin 不满足）: %s",
+            _describe_request_meta(request_meta),
+        )
+        return {
+            "action": "block",
+            "message": (
+                f"[a2a] ⚠️ {_describe_request_meta(request_meta)} 未生效：这些参数需要 "
+                "collector.enabled=true、目标为 dsh、且能解析出 platform/chat_id（走桥的流式投递）。"
+                "本次未投递，避免你以为参数已生效。"
+            ),
+        }
+
+    # 其余（a2a_orchestrate / 非 dsh / collector 关 / 非 messaging / message 空）：
+    # 仅 origin 注入。显式优先：调用方已给出 context_id 时不覆盖。
+    if explicit:
+        return None
+    if not origin:
+        return None
+    return {"action": "modify", "args": {"context_id": origin}}
+
+
+def _on_post_tool_call(
+    tool_name: str = "",
+    args: Any = None,
+    result: Any = None,
+    **_: Any,
+) -> None:
+    """post_tool_call 钩子：占位放行（return None）。
+
+    单执行 / 直播已由 pre_tool_call hook 承担，无需在 post 阶段二次消费；本钩子保留
+    占位以兼容 plugin.yaml 声明的 hook，无副作用。
+    """
+    return None
+
+
+def register(ctx) -> None:
+    """插件入口：读 collector 门控、注册 pre/post 钩子（单执行走 pre_tool_call hook）。
+
+    开关仍在此读一次写入模块级全局（作为初始值 / ``_CTX=None`` 时的回退值）；
+    运行期读取点已改热读（``_read_switch`` / ``_read_live_detail``），此处的值不再
+    固化生效。旧键 ``collector.code_blocks`` 已废弃：此处不读取（一律忽略）。
+    """
+    global _COLLECTOR_ENABLED, _EVENTS, _CONTENT, _LIVE_DETAIL, _CARD, _CTX
+    _CTX = ctx
+    try:
+        _COLLECTOR_ENABLED = _to_bool(ctx.get_config("collector.enabled", False))
+        # 事件流开关默认 true（向后兼容）；显式 false 才安静模式（只推最终结果）。
+        _EVENTS = _to_bool(ctx.get_config("collector.events", True))
+        # 内容开关默认 true（遗留）；显式 false 才收窄操作内细节。live_detail 显式设置时优先。
+        _CONTENT = _to_bool(ctx.get_config("collector.content", True))
+        # live_detail 默认 follow-dsh；存原始值（解析在每次任务开始经 _read_live_detail）。
+        _LIVE_DETAIL = ctx.get_config("collector.live_detail", "follow-dsh")
+        # card 默认 off（灰度）：存原始值，解析在每次任务开始经 _read_card_mode。
+        _CARD = ctx.get_config("collector.card", "off")
+    except Exception as exc:  # 读配置失败按默认处理，绝不阻断插件加载
+        logger.warning("hermes-a2a-bridge: read collector settings failed: %s", exc)
+        _COLLECTOR_ENABLED = False
+        _EVENTS = True
+        _CONTENT = True
+        _LIVE_DETAIL = "follow-dsh"
+        _CARD = "off"
+
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    ctx.register_hook("post_tool_call", _on_post_tool_call)
