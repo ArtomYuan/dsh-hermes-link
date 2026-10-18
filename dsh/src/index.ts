@@ -75,7 +75,7 @@ import {
   loadBindingStore,
 } from './link-binding.ts'
 import type { FirstUseMode, LinkBindingStore, WorkspaceChoice } from './link-binding.ts'
-import { USER_QUESTIONS_META_KEY } from './link-protocol.ts'
+import { LINK_PROTOCOL_VERSION, USER_QUESTIONS_META_KEY } from './link-protocol.ts'
 import type { RequestOptions, SandboxPresetService } from './request-options.ts'
 import { installA2ASettings, A2AConfigSchema, A2ASettingsSchema, DEFAULT_SETTLE_CAP_MS } from './settings.ts'
 import type { A2ASettings } from './settings.ts'
@@ -1202,11 +1202,19 @@ function buildAgentCard(host: string, port: number): AgentCard {
       organization: 'deepseek',
       url: 'https://github.com/deepseek-ai',
     },
-    version: '0.7.0',
+    version: '0.10.0',
     capabilities: {
       streaming: true,
       pushNotifications: false,
-      extensions: [],
+      // 链路协议声明：调用方（桥/安装器）据此做精确的握手（含协议版本）
+      extensions: [
+        {
+          uri: 'https://github.com/ArtomYuan/dsh-hermes-link/protocol',
+          description: 'dsh-hermes-link 链路协议（metadata 键 / 事件 / 提问作答载荷）',
+          required: false,
+          params: { linkProtocolVersion: LINK_PROTOCOL_VERSION },
+        },
+      ],
       extendedAgentCard: false,
     },
     securitySchemes: {},

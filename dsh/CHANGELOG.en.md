@@ -1,5 +1,8 @@
 # Change Log
 
+> **Since 0.10.0 the ledger lives at the repository root `CHANGELOG.md`** (merged into
+> `dsh-hermes-link`, lock-step versioning). This file keeps the history up to 0.9.0.
+
 [简体中文](CHANGELOG.md)
 
 All notable changes to this project are documented in this file.

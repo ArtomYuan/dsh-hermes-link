@@ -1,5 +1,7 @@
 # 更新日志
 
+> **自 0.10.0 起账本迁至仓库根 `CHANGELOG.md`**（合并为 `dsh-hermes-link`，单号锁步）。本文件保留 0.9.0 及更早的历史。
+
 [English](CHANGELOG.en.md)
 
 本项目的所有重要变更都会记录在此文件中。

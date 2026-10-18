@@ -1,6 +1,6 @@
 {
   "name": "@artomyuan/dsh-a2a-server",
-  "version": "0.7.0",
+  "version": "0.10.0",
   "description": "A2A (Agent2Agent) server bundle for DeepSeek Harness: exposes dsh agent sessions over the A2A protocol so remote agents (e.g. Hermes) can interoperate with a dsh profile.",
   "keywords": [
     "deepseek-harness",
