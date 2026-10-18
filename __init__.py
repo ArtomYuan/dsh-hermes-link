@@ -72,6 +72,7 @@ hook 里对 dsh 目标做**单执行**：
 
 import logging
 import re
+import sys
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -347,6 +348,62 @@ def _import_consumer():
     return _consumer
 
 
+def _import_qna():
+    """§2.6：qna 模块的唯一取用点（与 consumer 共用同一实例，避免出现两份作答登记表）。"""
+    return _import_consumer()._import_qna()
+
+
+# 已挂过问答回调的平台（幂等；同进程直连，进程内挂一次即可）
+_ASK_HANDLER_REGISTERED: set = set()
+
+
+def _ensure_ask_action_handler(platform: str) -> None:
+    """把 §2.6 的问答卡片处理器挂到平台适配器的注册表上（幂等；失败只告警不阻断直播）。
+
+    方向刻意是**桥 → 适配器**：适配器补丁只提供 ``register_ask_action_handler`` 注册表与
+    派发，绝不反向 import 用户插件——平台插件不被用户插件绑死；桥未挂上时适配器的点击
+    分支只响亮告警并如实换卡，不会伪造成功。
+    """
+    if not platform or platform in _ASK_HANDLER_REGISTERED:
+        return
+    try:
+        from gateway.run import _gateway_runner_ref
+        from gateway.config import Platform
+
+        runner = _gateway_runner_ref()
+        adapter = runner.adapters.get(Platform(platform)) if runner is not None else None
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: 取适配器失败，问答卡回调暂不可挂: %s", exc)
+        return
+    if adapter is None:
+        logger.warning("hermes-a2a-bridge: 未找到 %s 适配器，问答卡回调暂不可挂", platform)
+        return
+    module = sys.modules.get(type(adapter).__module__)
+    if module is None:
+        try:
+            import importlib
+
+            module = importlib.import_module(type(adapter).__module__)
+        except Exception as exc:
+            logger.warning("hermes-a2a-bridge: 定位适配器模块失败（%s）: %s", type(adapter).__module__, exc)
+            return
+    register = getattr(module, "register_ask_action_handler", None)
+    if not callable(register):
+        logger.warning(
+            "hermes-a2a-bridge: 适配器模块 %s 无 register_ask_action_handler"
+            "（问答桥接补丁未打或版本不符）——提问卡将无法回传作答",
+            type(adapter).__module__,
+        )
+        return
+    try:
+        register(_import_qna().handle_card_action)
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: 注册问答卡处理器失败: %s", exc)
+        return
+    _ASK_HANDLER_REGISTERED.add(platform)
+    logger.info("hermes-a2a-bridge: 问答卡回调已挂到 %s 适配器（同进程直连）", platform)
+
+
 def _coerce_timeout(value: Any, default: float) -> float:
     """把 peer 配置的 ``timeout`` 转为正数（int/float）；非法 / 缺失 / <=0 回退 ``default``。"""
     if value is None:
@@ -435,6 +492,9 @@ def _stream_dsh_call(message: str, context_id: str) -> str:
         live_routable,
     )
     timeout = _coerce_timeout(timeout_raw, consumer._DEFAULT_TIMEOUT)
+    # §2.6：直播起手前把问答卡片回调挂到适配器（幂等）——提问卡一旦发出，点击就得有归途。
+    if live_routable:
+        _ensure_ask_action_handler(platform)
     stats = consumer.consume_stream(
         url=url,
         token=token,

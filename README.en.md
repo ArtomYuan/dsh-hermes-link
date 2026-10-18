@@ -175,6 +175,35 @@ narrations** instead of being flattened into one group.
 
 ![Sequence](assets/sequence-en.png)
 
+## Interactive Q&A bridge (since v0.8.0, §2.6)
+
+When dsh asks a mid-task `ask_user_question`, the question is delivered to **the line that
+started the task** as a **Feishu Card JSON 2.0**: body + option buttons + free-text input +
+"submit"/"skip". The click goes back to the bridge **in-process** (no spooling, no polling)
+and the answer is written back through the **native A2A `input-required` + `taskId`
+continuation**, so the task resumes immediately; the card flips to "answered / skipped" in
+place.
+
+- **No timeout**: the whole Q&A path has none (fixed requirement). While suspended the task
+  sits in A2A `INPUT_REQUIRED`, `tasks/get` shows which task awaits which question, and the
+  first stream ends at the suspension — **the wait does not hold a long connection**.
+- **Default = today's behaviour**: no config key changes; with `collector.enabled=false` the
+  path never triggers. In addition the server claims questions **only** for callers that
+  explicitly declared the capability (`x-dsh-user-questions: true` in the initial message
+  metadata), so undeclared callers keep their previous behaviour.
+- **One card per question** for multi-question asks; `multi_select` is not rendered as a
+  checkbox group today — the card says "multi-select allowed" and accepts several labels
+  separated by commas (see the "known boundaries" note at the end of `qna.py`).
+- **No dangling waits**: only three exits — answered / skipped / slot closed. An undelivered
+  card, a websocket that is not up, a closed slot or an internal error all continue with
+  "skipped" (the server closes that question as aborted), never leaving the task without an
+  exit.
+- **Requires**: `dsh-a2a-server` ≥0.6.0 plus the Feishu adapter formal patch
+  (`hermes_ask_action` namespace + handler registry + `is_ws_ready()`, see
+  `~/.hermes/docs/hermes/custom-patches.md`). Without the adapter patch the bridge warns
+  loudly when a live stream starts, and the click branch acknowledges truthfully rather than
+  faking success.
+
 ## Relationship with dsh-a2a-server
 
 This plugin and [dsh-a2a-server](https://github.com/ArtomYuan/dsh-a2a-server) are not

@@ -7,6 +7,93 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-10-17
+
+> §2.6 **Interactive Q&A bridge**: a mid-task dsh `ask_user_question` is no longer
+> left unanswered — the question is delivered to **the line that started the task**
+> as a Feishu **Card JSON 2.0** (option buttons + free-text input + submit/skip),
+> the click goes back to the bridge **in-process** (no spooling, no polling), and the
+> answer is written back through the **native A2A `input-required` + `taskId`
+> continuation**, so the task resumes.
+> **No timeout anywhere** (fixed requirement); no config key is added or removed;
+> with `collector.enabled=false` the whole path stays dormant (default = today's behaviour).
+
+### Added
+
+- **New module `qna.py`** (stdlib only, no gateway dependency, unit-testable): three
+  responsibilities — (1) **question card** `build_question_card` (Card JSON 2.0: body,
+  option buttons, input, submit/skip; option buttons carry the formal namespace fields
+  `hermes_ask_action` + `ask_id` + `qid` + `choice` + `label`; one card per question);
+  (2) **answer registry** `AskSlot` / `register_ask` / `handle_card_action` (the adapter
+  patch's handler); (3) **continuation body** `answer_stream_body` (`taskId` +
+  `question-answer` data part as a JSON-RPC envelope) and `ResumableStream` (splices the
+  continuation stream back into the same consumption loop).
+- **Card budget and hard rules guarded in one place**: ≤30 KB per card, ≤200 components,
+  ≤100-character button copy, input `max_length` ≤1000; acknowledgement cards are always
+  2.0 (a cross-version card update fails with client error 200830).
+- **`consumer.py` wiring**: `question` event → send card → wait with **no timeout** →
+  continuation → the first hop's post-answer artifacts/completion are drained by the
+  **same** loop. Question handling deliberately runs **before every gate**: in quiet mode
+  (`collector.events=false`) intermediate events are skipped, but a question must still be
+  handled or the task hangs forever.
+- **Pre-send gates**: (1) wait for the platform websocket to be up (`_wait_ws_ready` →
+  the adapter's `is_ws_ready()`; appendix A measured caveat: clicks inside the restart
+  window report "target callback service not online"); (2) only wait for an answer once the
+  card was **really delivered** (`sender` falling back to a text row means nothing to
+  click, so the ask is closed as skipped).
+- **No-dangling discipline**: only three exits — answered / skipped / slot closed. A send
+  failure, a closed slot or an internal error all continue with `skipped` (the server
+  closes that question as aborted); a task is never left waiting without an exit.
+- **Bounded retry when opening the continuation stream** (`_open_continuation`): the
+  continuation is the **only** way an answer travels back; if the request cannot be opened
+  the answer never lands and, with no timeout on the dsh side, that turn hangs forever. So
+  the stream is opened by explicitly pulling its first frame (calling a generator does not
+  issue the request) and a failure is retried 3 times (retrying is safe: the server's
+  release is idempotent per `askId`, a duplicate continuation is merely logged as "no
+  pending question matched"). If all three attempts fail it warns loudly and states that
+  the turn must be aborted from the GUI.
+- **Capability declaration**: the initial message carries
+  `metadata["x-dsh-user-questions"]=true`. The server claims questions **only** for callers
+  that declared it, otherwise a question would be parked on a client that cannot answer it
+  and, with no timeout, hang silently. Older servers ignore the key.
+- **Visible suspension (panel mode only)**: with `collector.card=panel`, one
+  `⏳ waiting for an answer (N question(s)) — resumes automatically` status row is emitted;
+  `card=off` lines gain **no** extra noise (the question card itself is the visible surface
+  and flips to "answered" in place on click).
+- Tests: `tests/test_qna.py` (29 cases), `tests/test_qna_flow.py` (12 cases: scripted-stream
+  end-to-end incl. quiet mode, card-send failure, websocket not ready, stale token,
+  exhausted continuation retries, panel suspension marker vs. no-noise off mode),
+  `tests/test_qna_wiring.py` (4 cases: bridge → adapter registry wiring and degraded warns).
+
+### Changed
+
+- **Single-instance discipline + process-shared registry**: `qna` is obtained only through
+  `consumer._import_qna()` and pinned under the alias `hermes_a2a_bridge.qna`; the **answer
+  registry container lives in the fixed `sys.modules` entry
+  `hermes_a2a_bridge_qna_registry`** — even if `qna` ends up loaded twice (an external alias
+  cleanup), there is still exactly one `ask_id -> slot` map and a click can never miss. Not
+  pedantry: a split registry manifests as "clicked but nothing happens, task hangs", which
+  cannot self-heal with no timeout.
+- **Invalid options are rejected loudly**: when an option button click cannot be resolved to
+  an option (out-of-range index, unknown label) the bridge returns a red "unrecognised
+  option" card and does **not** record an answer — it never degrades silently into an "empty
+  submit" (which would record an invalid click as the user choosing nothing).
+- **Counting**: `stats["events_seen"]` now includes `question` events (previously counted
+  after the `continue`, so one short).
+- `_streaming_message_body` now carries the capability declaration (harmless to old servers).
+- `make_sender` exposes a `ws_ready(platform)` probe (undecidable → pass through; the probe
+  itself never blocks Q&A).
+
+### Companion
+
+- Must land together: `dsh-a2a-server` **0.6.0** (`question` event + `user-questions`
+  claim + `input-required`/continuation release) and the Feishu adapter **formal patch**
+  (`hermes_ask_action` namespace, handler registry, 2.0 ack card, `is_ws_ready()`; see
+  `docs/hermes/custom-patches.md`) — it supersedes the trial hook
+  `hermes_qa_card_action`.
+- The adapter patch lives in the platform plugin; when no bridge handler is registered its
+  click branch only logs loudly and acknowledges truthfully, never faking success.
+
 ## [0.7.3] - 2026-10-12
 
 > **Warning: the change applies only to `collector.card=panel` (`off` is still the

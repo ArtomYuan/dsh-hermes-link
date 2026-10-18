@@ -253,6 +253,17 @@ are. Every shape change in v0.5.x / v0.7.0 touches rendering only and adds no
 `collector.*` key — avoiding a hot-read switch, a fourth Dashboard switch and
 write-back validation for a mere rendering shape.
 
+### Why does the interactive Q&A bridge add no config key? (v0.8.0)
+
+The §2.6 interactive Q&A bridge likewise adds **no `collector.*` key**: it rides the same
+live path — with `collector.enabled` true (and a dsh target whose `a2a_call` is intercepted)
+the bridge receives the `question` events the server emits; with `enabled=false` the whole
+Q&A path stays dormant and behaviour matches the previous release. Only two **runtime
+prerequisites** (not configuration) are new: (1) the Feishu adapter formal patch (providing
+`register_ask_action_handler` and `is_ws_ready()`, see `docs/hermes/custom-patches.md`);
+(2) `dsh-a2a-server` ≥0.6.0 (it claims questions and supports the `taskId` continuation).
+Either one missing logs loudly when a live stream starts — never a silent failure.
+
 ### Troubleshooting: why does a conversation show no live messages? (v0.5.1)
 
 The entry point of the live chain is the `pre_tool_call` **interception** — an

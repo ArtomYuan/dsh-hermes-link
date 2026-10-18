@@ -7,6 +7,73 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.8.0] - 2026-10-17
+
+> §2.6 **交互问答桥接**：dsh 在任务中途的 `ask_user_question` 不再无人应答——
+> 问题以飞书 **2.0 交互卡**（选项按钮 + 自由输入 + 提交/跳过）投到**发起那条线**，
+> 点击**同进程直连**回桥（不落盘、不轮询），作答经 **A2A 原生
+> `input-required` + `taskId` 续投**写回 dsh 会话，任务继续跑。
+> **全程零超时**（已定死）；不新增 / 不删除任何配置键；`collector.enabled=false`
+> 时整条通路不被触发（缺省＝现状行为）。
+
+### Added
+
+- **新模块 `qna.py`**（纯标准库、零 gateway 依赖，可纯单测）：三块职责——
+  ① **问题卡** `build_question_card`（Card JSON 2.0：题干/选项按钮/输入框/提交/跳过；
+  选项按钮回传值带正式命名空间字段 `hermes_ask_action` + `ask_id` + `qid` + `choice`
+  + `label`；多问题逐题一卡）；② **作答登记表** `AskSlot` / `register_ask` /
+  `handle_card_action`（适配器补丁的处理器实现）；③ **续投资料**
+  `answer_stream_body`（`taskId` + `question-answer` Data Part 的 JSON-RPC 报文）
+  与 `ResumableStream`（把续投流拼回同一消费循环）。
+- **卡片预算与铁律统一守卫**：卡 ≤30KB、≤200 组件、按钮文案 ≤100 字、输入
+  `max_length` ≤1000 全部在 `qna.py` 收口；响应卡恒 2.0（跨版本换卡客户端报 200830）。
+- **`consumer.py` 问答接线**：`question` 事件 → 发卡 → **零超时**等答 → 续投 →
+  首跳解挂后的 artifact/completed 仍由**同一**消费循环收口。问答处理刻意排在
+  **任何门控之前**：安静模式（`collector.events=false`）下中间事件被跳过，但提问
+  必须照常处理，否则任务永久悬挂。
+- **发卡前置闸**：① **等平台长连接就位**（`_wait_ws_ready` → 适配器 `is_ws_ready()`；
+  附录 A 实证坑：重启窗口期内点击报「目标回调服务未在线」）；② **卡片真的发出去了**
+  才等作答（`sender` 回落文本行时无卡可点，直接按跳过收口）。
+- **零悬挂纪律**：只有「作答 / 跳过 / 槽位收场」三种出口。发卡失败、槽位收场、处理
+  异常一律以 `skipped` 续投（服务端把该提问以中止收口）；任务绝不留在无解等待里。
+- **续投流有界重试**（`_open_continuation`）：续投是作答的**唯一**归途，请求打不开就
+  等于答案没送达，而 dsh 侧提问零超时 ⇒ 那条 turn 会永久挂起。故建立续投流时显式取
+  首帧（生成器只调用不发起请求），失败重试 3 次（重试安全：服务端解挂按 `askId`
+  幂等，重复续投只被记为「未命中未决提问」）；三次都失败则响亮告警并说明该 turn 需在
+  GUI 侧中止收口。
+- **能力声明**：首投报文的 `message.metadata["x-dsh-user-questions"]=true`。服务端
+  **只认领声明过的调用方**的提问——否则提问会被挂到没有作答能力的客户端上，而问答
+  零超时＝无声挂死。旧服务端忽略该键，既有链路零影响。
+- **挂起可见（仅面板档）**：`collector.card=panel` 时在提问处补一条
+  `⏳ 等待作答（N 题）——作答后自动继续` 状态行；`card=off` 的线**不新增任何提示
+  噪声**（问题卡本身即可见面，点击后就地换卡为「已作答」）。
+- 测试：`tests/test_qna.py`（29 例：卡面铁律 / 作答解码 / 无效选项拒绝 / 零悬挂等待 / 续投报文）、
+  `tests/test_qna_flow.py`（12 例：脚本化流驱动的全链，含安静模式、发卡失败、WS 未就位、
+  异常令牌、续投重试耗尽、面板档挂起位与非面板档无噪声）、`tests/test_qna_wiring.py`（4 例：桥 → 适配器注册表接线与降级告警）。
+
+### Changed
+
+- **单实例纪律 + 登记表进程级共享**：`qna` 模块由 `consumer._import_qna()` 单点取用并挂
+  固定别名 `hermes_a2a_bridge.qna`；**作答登记表的容器挂在固定的 `sys.modules` 条目
+  `hermes_a2a_bridge_qna_registry` 上**——即便 qna 因外部清理别名而被加载成两份实例，
+  「ask_id → 等待槽位」也只有一份，点击绝不落空。这条不是洁癖：登记表分叉的症状是
+  「点了没反应、任务永久挂起」（零超时下无法自愈）。
+- **无效选项响亮拒绝**：点了选项按钮却解析不出选项（越界序号 / 未知标签）时，返回红卡
+  「选项无法识别」且**不记成作答**——绝不悄悄降级成「空提交」（把无效点击记成用户主动
+  不选）。
+- **计数口径**：`stats["events_seen"]` 现在也计入 `question` 事件（提问在旧代码里于 `continue`
+  **之后**才计数，故少一个）。
+- `_streaming_message_body` 增加能力声明 metadata（对旧服务端无影响）。
+- `make_sender` 附带 `ws_ready(platform)` 探针（判不出来即放行，绝不因探测把问答卡死）。
+
+### 配套
+
+- 需同步落地：`dsh-a2a-server` **0.6.0**（`question` 事件 + `user-questions` 认领 +
+  `input-required`/续投解挂）与飞书适配器**正式补丁**（`hermes_ask_action` 命名空间、
+  处理器注册表、2.0 响应卡、`is_ws_ready()`；见 `docs/hermes/custom-patches.md`，
+  已取代试验钩子 `hermes_qa_card_action`）。
+- 适配器是平台插件侧补丁；桥未注册处理器时点击分支只响亮告警并如实换卡，不伪造成功。
+
 ## [0.7.3] - 2026-10-12
 
 > ⚠️ **改动仅作用于 `collector.card=panel`（默认仍 `off`）**：dsh 流出的**全部内容**改由

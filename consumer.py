@@ -27,14 +27,52 @@ wire 格式（dsh-a2a-server, @a2a-js/sdk v1.1.0）
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
+import sys
 import time
 import urllib.request
 import uuid
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _import_qna():
+    """惰性 import ``qna`` 模块（§2.6 问答桥接）——**进程内唯一实例**的取用点。
+
+    优先包内相对导入；按文件路径加载（单文件直跑 / 加载器回退）时挂到固定别名
+    ``hermes_a2a_bridge.qna`` 上并先查 ``sys.modules``。这一步不是洁癖：qna 持有
+    「ask_id → 等待槽位」登记表，若被加载成两份实例，适配器补丁投进来的点击就落不到
+    发卡线程等的那个槽位上——表现为"点了没反应、任务永久挂起"。
+    """
+    global _QNA_MODULE
+    if _QNA_MODULE is not None:
+        return _QNA_MODULE
+    canonical = "hermes_a2a_bridge.qna"
+    cached = sys.modules.get(canonical)
+    if cached is not None:
+        _QNA_MODULE = cached
+        return cached
+    try:
+        from . import qna as _qna
+    except (ImportError, ValueError) as exc:
+        logger.debug("hermes-a2a-bridge: relative qna import failed: %s", exc)
+        import importlib.util
+        import os
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qna.py")
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        _qna = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_qna)
+    # 别名兜底：无论从哪条路加载，后续取用都收敛到同一实例
+    sys.modules.setdefault(canonical, _qna)
+    _QNA_MODULE = _qna
+    return _qna
+
+
+_QNA_MODULE: Any = None
 
 A2A_PROTOCOL_VERSION = "1.0"
 _DEFAULT_TIMEOUT = 300
@@ -45,6 +83,9 @@ DEFAULT_ENABLED = False
 
 # 触发 text 缓冲 flush 的终态（status 终态；turn_end 单独处理）。
 _TERMINAL_STATES = frozenset({"completed", "failed", "canceled"})
+
+# §2.6 问答能力声明键：随首投 message.metadata 带上，服务端据此决定是否认领提问。
+QNA_OPT_IN_KEY = "x-dsh-user-questions"
 
 # A2A 终态 → dsh ``TurnEndReason``（收束行文案用；对齐 dsh-session 的 reason 并集）。
 _STATUS_REASON = {"completed": "completed", "failed": "error", "canceled": "aborted"}
@@ -267,6 +308,16 @@ def _normalize_data_part(
         return None
     kind = value.get("kind")
     turn = value.get("turn")
+    if kind == "question":
+        # §2.6：服务端在提问挂起时发的 question 事件；**必须**在上层任何门控之前处理，
+        # 否则安静模式下会被跳过、任务永久悬挂（见 consume_stream 的注释）。
+        return {
+            "type": "question",
+            "payload": value,
+            "ask_id": value.get("askId", ""),
+            "task_id": value.get("taskId", ""),
+            "turn": turn,
+        }
     if kind == "thinking":
         return {"type": "thinking", "text": value.get("text", ""), "turn": turn}
     if kind == "tool_call":
@@ -1705,6 +1756,26 @@ def make_sender(ctx: Any = None) -> Callable[[str, str, str, str], Dict[str, Any
             return {"ok": False, "error": "send_failed", "text": redacted,
                     "target": target, "message_id": None}
 
+    def ws_ready(platform: str) -> Optional[bool]:
+        """平台长连接是否就位：``True`` 就绪 / ``False`` 未就绪 / ``None`` 判不出来。
+
+        供 §2.6 发提问卡前的那道闸使用（见 ``_wait_ws_ready``）；探针缺失或异常都按
+        「判不出来」放行，绝不因为探测本身把问答卡死。
+        """
+        try:
+            from gateway.run import _gateway_runner_ref
+            from gateway.config import Platform
+
+            runner = _gateway_runner_ref()
+            adapter = runner.adapters.get(Platform(platform)) if runner is not None else None
+            probe = getattr(adapter, "is_ws_ready", None)
+            if not callable(probe):
+                return None
+            return bool(probe())
+        except Exception:
+            return None
+
+    send.ws_ready = ws_ready  # type: ignore[attr-defined]  # 探针随 sender 一起传（闭包属性）
     return send
 
 
@@ -1712,12 +1783,227 @@ def make_sender(ctx: Any = None) -> Callable[[str, str, str, str], Dict[str, Any
 # 6. 编排入口
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# 6b. §2.6 交互问答桥接（question 事件 → 卡片 → 作答 → A2A input-required 续投）
+# --------------------------------------------------------------------------
+
+def _question_fallback_text(question: Dict[str, Any], index: int, total: int) -> str:
+    """提问的纯文本形态：既是卡片失败时的降级正文，也是卡片的伴随文本。"""
+    head = f"❓ 需要您作答（第 {index}/{total} 题）" if total > 1 else "❓ 需要您作答"
+    lines = [head, "", str(question.get("question") or "")]
+    if question.get("detail"):
+        lines += ["", str(question["detail"])]
+    for i, option in enumerate(question.get("options") or [], start=1):
+        label = str((option or {}).get("label") or "").strip()
+        if not label:
+            continue
+        description = str((option or {}).get("description") or "").strip()
+        lines.append(f"{i}) {label}" + (f"——{description}" if description else ""))
+    return "\n".join(lines)
+
+
+# 发提问卡前等平台长连接就位的上限（秒）——**有界**：这是发卡前置闸，不是问答等待
+# （问答全程零超时）。测试可改此常量。
+_WS_READY_TIMEOUT = 60.0
+
+# 续投流建立失败的重试次数与退避基数（秒）：续投是作答的唯一归途，打不开＝dsh 侧永久挂起
+_CONTINUATION_ATTEMPTS = 3
+_CONTINUATION_RETRY_INTERVAL = 1.0
+
+
+def _wait_ws_ready(
+    sender: Callable[..., Any], platform: str, *, timeout: Optional[float] = None, interval: float = 2.0,
+) -> bool:
+    """发提问卡前等平台长连接就位（附录 A 实证坑：重启窗口期内点击报「目标回调服务未在线」）。
+
+    ``sender`` 由 ``make_sender`` 造、带 ``ws_ready(platform)`` 探针；探针不可用或判不
+    出来时**放行**（不因探测缺失而阻断问答）。等待是**有界**的——这道闸不是问答等待
+    （问答本身零超时），超时即如实返回 False，由调用方按跳过收口，绝不悬挂。
+    """
+    probe = getattr(sender, "ws_ready", None)
+    if not callable(probe):
+        return True
+    limit = _WS_READY_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + max(0.0, limit)
+    while True:
+        try:
+            ready = probe(platform)
+        except Exception as exc:  # 探针异常按「判不出来」处理
+            logger.warning("hermes-a2a-bridge: WS 就绪探针异常（放行）: %s", exc)
+            return True
+        if ready is not False:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
+def _handle_question_event(
+    event: Dict[str, Any],
+    *,
+    url: str,
+    context_id: str,
+    platform: str,
+    chat_id: str,
+    thread_id: str,
+    sender: Callable[..., Any],
+    headers: Dict[str, str],
+    timeout: int,
+    card_mode: Optional[str],
+) -> Optional[Iterator[Dict[str, Any]]]:
+    """认领一次提问：逐题发卡 → 零超时等答 → 返回**续投流**（调用方拼到当前流尾部）。
+
+    出口纪律（全链零悬挂）：只有「作答」才把答案带给服务端；**发卡未真正送达** /
+    槽位被收场 / 用户跳过，一律以 ``skipped`` 续投（服务端把该提问以中止收口），
+    绝不把任务留在没有出路的等待里。返回 ``None`` 表示连续投都发不出（调用方收工）。
+    """
+    qna = _import_qna()
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    ask_id = str(payload.get("askId") or event.get("ask_id") or "")
+    task_id = str(payload.get("taskId") or event.get("task_id") or "")
+    questions = payload.get("questions") if isinstance(payload.get("questions"), list) else []
+    if not ask_id or not task_id or not questions:
+        logger.warning(
+            "hermes-a2a-bridge: question 事件载荷不完整，无法建卡（ask=%r task=%r 题数=%d）",
+            ask_id, task_id, len(questions),
+        )
+        return None
+
+    slot = qna.AskSlot(ask_id, questions)
+    qna.register_ask(slot)
+    answers: list = []
+    skipped = False
+    try:
+        total = len(questions)
+        # 挂起可见（B#4，仅面板档）：非面板线不因问答新增提示噪声——问题卡本身
+        # 就是可见面，且点击后就地换卡。
+        if card_mode == "panel":
+            _send_aux_line(
+                sender, platform, chat_id, thread_id,
+                f"⏳ 等待作答（{total} 题）——作答后自动继续",
+            )
+        for index, question in enumerate(questions, start=1):
+            qid = str(question.get("id") or "")
+            if not qid:
+                continue
+            text = _question_fallback_text(question, index, total)
+            card = qna.build_question_card(
+                ask_id=ask_id,
+                qid=qid,
+                question=str(question.get("question") or ""),
+                index=index,
+                total=total,
+                header=question.get("header"),
+                detail=question.get("detail"),
+                options=question.get("options"),
+                multi_select=bool(question.get("multiSelect")),
+                line_label=f"{chat_id}/{thread_id}" if thread_id else chat_id,
+            )
+            # 发卡前等平台长连接就位：窗口期内点击会报「目标回调服务未在线」，
+            # 卡虽发出但点击归途不通（附录 A 实证坑）。超时即按跳过收口。
+            if not _wait_ws_ready(sender, platform):
+                logger.warning(
+                    "hermes-a2a-bridge: 平台长连接未就位，提问卡未发（按跳过收口）platform=%s", platform,
+                )
+                skipped = True
+                break
+            res = sender(platform, chat_id, thread_id, text, card=card)
+            # 判据是**卡片真的发出去了**（sender 回落文本行时 via != adapter-card）：
+            # 没有可点的卡就没有作答归途，此时等待毫无意义。
+            if not (isinstance(res, dict) and res.get("ok") and res.get("via") == "adapter-card"):
+                logger.warning(
+                    "hermes-a2a-bridge: 提问卡未真正送达（%r），本次提问按跳过收口", res,
+                )
+                skipped = True
+                break
+            answer = slot.wait_for(qid)  # 零超时：只认「作答 / 跳过 / 槽位收场」
+            if answer is None:
+                logger.warning("hermes-a2a-bridge: 提问槽位被收场，本次提问按跳过收口 ask=%s", ask_id)
+                skipped = True
+                break
+            if "skipped" in answer:
+                skipped = True
+                break
+            item: Dict[str, Any] = {"id": qid, "selected": list(answer.get("selected") or [])}
+            if answer.get("custom"):
+                item["custom"] = answer["custom"]
+            answers.append(item)
+    except Exception as exc:  # 任何异常都不许把任务留在悬挂里
+        logger.warning("hermes-a2a-bridge: 提问处理异常，按跳过收口: %s", exc)
+        skipped = True
+    finally:
+        qna.discard_ask(ask_id)
+
+    body = qna.answer_stream_body(
+        task_id=task_id, context_id=context_id, ask_id=ask_id, answers=answers, skipped=skipped,
+    )
+    logger.info(
+        "hermes-a2a-bridge: 提问续投 task=%s ask=%s skipped=%s 答数=%d",
+        task_id, ask_id, skipped, len(answers),
+    )
+    return _open_continuation(url, body, headers, timeout, ask_id=ask_id)
+
+
+def _open_continuation(
+    url: str, body: Dict[str, Any], headers: Dict[str, str], timeout: int, *, ask_id: str,
+) -> Optional[Iterator[Dict[str, Any]]]:
+    """建立续投流并**有界重试**。
+
+    续投是作答的**唯一**归途：请求打不开就等于答案没送达，而 dsh 侧的提问是零超时的
+    ——那条 turn 会**永久挂起**。故这里必须有界重试（重试是安全的：服务端解挂按
+    ``askId`` 幂等，重复续投只会被记为「未命中未决提问」）。三次都失败则如实告警，
+    说明该 turn 需在 GUI 侧中止收口。
+
+    ``iter_sse_data`` 是生成器：仅调用不发起请求，必须 ``next()`` 一次才真正建立连接，
+    故这里显式取首帧（服务端续投流必然先发 task 快照，不会长等）。
+    """
+    last_error: Optional[BaseException] = None
+    for attempt in range(1, _CONTINUATION_ATTEMPTS + 1):
+        try:
+            stream = iter_sse_data(url, body, headers, timeout)
+            first = next(stream, None)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "hermes-a2a-bridge: 续投流建立失败（第 %d/%d 次）ask=%s: %s",
+                attempt, _CONTINUATION_ATTEMPTS, ask_id, exc,
+            )
+            if attempt < _CONTINUATION_ATTEMPTS:
+                time.sleep(_CONTINUATION_RETRY_INTERVAL * attempt)
+            continue
+        if first is None:
+            return iter(())
+        return itertools.chain([first], stream)
+    logger.warning(
+        "hermes-a2a-bridge: 续投流 %d 次都未建立，本次作答没能送达服务端"
+        "（dsh 侧提问仍挂起，需中止该 turn 收口）ask=%s last_error=%s",
+        _CONTINUATION_ATTEMPTS, ask_id, last_error,
+    )
+    return None
+
+
+def _send_aux_line(
+    sender: Callable[..., Any], platform: str, chat_id: str, thread_id: str, text: str,
+) -> None:
+    """发一条辅助状态行（仅面板档使用）；失败只告警，不影响提问主链。"""
+    try:
+        res = sender(platform, chat_id, thread_id, text)
+        if not (isinstance(res, dict) and res.get("ok")):
+            logger.warning("hermes-a2a-bridge: 提问状态行未送达: %r", res)
+    except Exception as exc:
+        logger.warning("hermes-a2a-bridge: 提问状态行发送异常: %s", exc)
+
+
 def _streaming_message_body(message: str, context_id: str) -> Dict[str, Any]:
-    """构造 SendStreamingMessage 的 params（user message + contextId）。
+    """构造 SendStreamingMessage 的 params（user message + contextId + 问答能力声明）。
 
     A2A v1.0 Part 的 JSON 序列化用判别字段名（text / data，非 ``content.$case``）；
     Role 枚举 JSON 值为 ``ROLE_USER``；SDK 校验 ``SendStreamingMessage`` 要求
     ``message.messageId`` 非空。
+
+    ``metadata["x-dsh-user-questions"]=true`` 是 §2.6 的**能力声明**：服务端只认领
+    声明过的调用方的提问——否则提问会被挂到没有作答能力的客户端上，而问答零超时＝
+    无声挂死。旧服务端不认识该键，直接忽略，故对既有链路零影响。
     """
     return {
         "jsonrpc": "2.0",
@@ -1731,6 +2017,8 @@ def _streaming_message_body(message: str, context_id: str) -> Dict[str, Any]:
                 ],
                 "messageId": uuid.uuid4().hex,
                 "contextId": context_id,
+                # 声明本客户端能接住「交互提问」并作答（飞书交互卡 + A2A 续投归途）
+                "metadata": {QNA_OPT_IN_KEY: True},
             }
         },
     }
@@ -1794,12 +2082,33 @@ def consume_stream(
 
     throttler = Throttler(min_interval=min_interval, level=mode, card=card_mode)
     try:
-        results = iter_sse_data(
-            url, _streaming_message_body(message, context_id), headers, timeout
+        # §2.6：包一层可续接迭代器——提问答完后把「续投流」拼到当前流尾部，于是首跳
+        # 解挂后的后续事件（artifact/completed）仍由本循环消费，任务收尾逻辑零改动。
+        qna = _import_qna()
+        results = qna.ResumableStream(
+            iter_sse_data(url, _streaming_message_body(message, context_id), headers, timeout)
         )
         for event in normalize_events(results):
             try:
                 stats["events_seen"] += 1
+                # 问答必须**先于**任何门控处理：安静模式（events=false）会跳过中间事件，
+                # 而提问无人作答题就永远不续跑——那正是「全程零超时」下的死结。
+                if event.get("type") == "question":
+                    resumed = _handle_question_event(
+                        event,
+                        url=url,
+                        context_id=context_id,
+                        platform=platform,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        sender=sender,
+                        headers=headers,
+                        timeout=timeout,
+                        card_mode=card_mode,
+                    )
+                    if resumed is not None:
+                        results.resume(resumed)
+                    continue
                 if event.get("type") == "status":
                     stats["states"].append(event.get("state"))
                 if event.get("type") == "text" and event.get("final"):

@@ -191,6 +191,16 @@ handler），故弃用 override，改在 `pre_tool_call` hook 内做**单执行*
 不变。v0.5.x / v0.7.0 多次形态变更都只改渲染，不新增 `collector.*` 键——避免为一个
 渲染形态再引入热读开关、Dashboard 第四开关与写回校验面。
 
+### 交互问答桥接为什么不加配置键？（v0.8.0）
+
+§2.6 的交互问答桥接照样**不新增 `collector.*` 键**：它挂在同一条直播链上——
+`collector.enabled` 为真（且目标是 dsh、`a2a_call` 被拦截）时，桥才会收到服务端送出的
+`question` 事件；`enabled=false` 时整条问答通路不被触发，行为与升级前一致。多出的只有
+**两处运行期前置**（都不是配置）：① 飞书适配器的正式补丁（提供
+`register_ask_action_handler` 与 `is_ws_ready()`，见 `docs/hermes/custom-patches.md`）；
+② 服务端 `dsh-a2a-server` ≥0.6.0（认领提问并支持 `taskId` 续投解挂）。任一缺失都会在
+直播起手时**响亮告警**，不会静默失效。
+
 ### 排查：某会话为何没有直播消息？（v0.5.1）
 
 直播链路的入口是 `pre_tool_call` 的**拦截**——**未被拦截的 `a2a_call` 一定没有
