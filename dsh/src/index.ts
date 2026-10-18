@@ -67,6 +67,15 @@ import {
   readRequestOptions,
   resolveWorkspaceTarget,
 } from './request-options.ts'
+import {
+  FIRST_USE_WORKSPACE_OPTIONS,
+  bindingFromAnswers,
+  effectiveRequestOptions,
+  firstUseQuestions,
+  loadBindingStore,
+} from './link-binding.ts'
+import type { FirstUseMode, LinkBindingStore, WorkspaceChoice } from './link-binding.ts'
+import { USER_QUESTIONS_META_KEY } from './link-protocol.ts'
 import type { RequestOptions, SandboxPresetService } from './request-options.ts'
 import { installA2ASettings, A2AConfigSchema, A2ASettingsSchema, DEFAULT_SETTLE_CAP_MS } from './settings.ts'
 import type { A2ASettings } from './settings.ts'
@@ -134,7 +143,7 @@ const executionMode = new AsyncLocalStorage<{ streaming: boolean }>()
  * 全程零超时，等于无声挂死。声明制让**缺省行为与今天一致**（提问照旧以 NO_PROVIDER
  * 立刻失败），只有声明过的调用方才进入问答桥接。
  */
-const QNA_OPT_IN_KEY = 'x-dsh-user-questions'
+const QNA_OPT_IN_KEY = USER_QUESTIONS_META_KEY
 
 /** 读客户端问答能力声明（缺省 false＝不认领） */
 function readsQuestionOptIn(message: { metadata?: unknown } | undefined): boolean {
@@ -156,6 +165,8 @@ const runtimeConfig = {
   contextMapTtlDays: 7,
   // 释放 Lead 前等待活跃 continuable 子代理结算的上限（毫秒）；0 = 关闭等待
   settleCapMs: DEFAULT_SETTLE_CAP_MS,
+  // §2.2 首选定：off（缺省＝现状，不干预）/ ask（对话首投发「选工作区+沙箱档」卡）
+  firstUseSelection: 'off' as FirstUseMode,
 }
 
 /** 构造一个纯文本 Part */
@@ -568,6 +579,8 @@ async function resolveSession(
 const ownedTaskByAgent = new Map<object, OwnedTask>()
 /** taskId → 首跳跑完信号：续投分支等它，避免提前返回时 SDK 收掉仍在跑的总线 */
 const taskDrains = new Map<string, { promise: Promise<void>; release: () => void }>()
+/** §2.2/§2.3：对话级绑定账本（首选定结果 + 记忆）；apply 时按 statePath 载入 */
+let bindingStore: LinkBindingStore | undefined
 
 /**
  * 把 A2A task 映射为一次 dsh agent 同步执行（最小版：每次新建独立会话）。
@@ -640,6 +653,14 @@ class DshAgentExecutor implements AgentExecutor {
         }),
       )
 
+      // 2.5 §2.2 首选定：对话首次投递、未显式带参、且调用方声明了问答能力时，发
+      //     「选工作区 + 选沙箱档」卡（§2.6 通道）；不选＝照旧通用区/当前档（记账后不再问）。
+      //     优先级：显式参数 > 绑定 > 缺省；首选定只补缺省，绝不覆盖显式值。
+      const qnaDeclared = streaming && readsQuestionOptIn(userMessage)
+      const effectiveOptions = await this.applyFirstUseSelection(
+        requestContext, eventBus, qnaDeclared, requestOptions,
+      )
+
       // 3. dsh 真实执行（按 contextId 复用/新建会话 → followup → whenIdle → 读最终文本），
       //    期间把高信号中间事件实时推为 A2A 流式 artifactUpdate
       const resultText = await this.runDshTask(text, contextId, (desc) => {
@@ -684,7 +705,7 @@ class DshAgentExecutor implements AgentExecutor {
             }),
           )
         }
-      }, { taskId, contextId, eventBus, qna: streaming && readsQuestionOptIn(userMessage) }, requestOptions)
+      }, { taskId, contextId, eventBus, qna: qnaDeclared }, effectiveOptions)
 
       if (this.cancelled.has(taskId)) {
         eventBus.publish(
@@ -737,6 +758,73 @@ class DshAgentExecutor implements AgentExecutor {
     } finally {
       this.cancelled.delete(taskId)
     }
+  }
+
+  /**
+   * §2.2/§2.3：首选定与绑定记忆（**服务端唯一权威**）。
+   *
+   * 触发条件（全部满足）：`firstUseSelection=ask`、该对话无绑定、调用方未显式带
+   * workspace/sandbox、且声明了问答能力。发「选工作区 + 选沙箱档」一卡组；作答后
+   * 记绑定（选空＝记 answered、不改缺省），之后同对话不再问。
+   *
+   * 失败纪律：卡片没送达 / 用户跳过 / 任务中止 → **回落缺省，绝不把任务卡死**；
+   * 用户跳过记 `answered=true`（不再打扰），投递失败不记账（下次可重试）。
+   *
+   * @returns 本次生效选项（显式 > 绑定 > 缺省）
+   */
+  private async applyFirstUseSelection(
+    requestContext: RequestContext,
+    eventBus: ExecutionEventBus,
+    qnaDeclared: boolean,
+    explicit: RequestOptions,
+  ): Promise<RequestOptions> {
+    const store = bindingStore
+    const contextId = requestContext.contextId
+    const binding = store?.get(contextId)
+    const shouldAsk = store !== undefined
+      && binding === undefined
+      && runtimeConfig.firstUseSelection === 'ask'
+      && explicit.workspace === undefined
+      && explicit.sandbox === undefined
+      && qnaDeclared
+    if (!shouldAsk) return effectiveRequestOptions(explicit, binding)
+
+    const { items, labels } = firstUseQuestions(this.workspaceChoices())
+    // 作答期间续投流必须能持续接收 → 先登记首跳完成信号（runDshTask 会沿用同一份）
+    if (!taskDrains.has(requestContext.taskId)) {
+      const drain = Promise.withResolvers<void>()
+      taskDrains.set(requestContext.taskId, { promise: drain.promise, release: () => { drain.resolve() } })
+    }
+    try {
+      const answers = await claimQuestion(
+        { taskId: requestContext.taskId, contextId, eventBus, qna: true }, items, undefined,
+      )
+      const next = bindingFromAnswers(answers, labels)
+      store?.set(contextId, next)
+      console.log(
+        `[dsh-a2a-server] 首选定已记账: context=${contextId} ` +
+        `workspace=${JSON.stringify(next.workspace ?? null)} sandbox=${next.sandbox ?? '(缺省)'}`,
+      )
+      return effectiveRequestOptions(explicit, next)
+    } catch (e) {
+      const message = String((e as { message?: unknown })?.message ?? e)
+      // claimQuestion 的三种出口：用户跳过（记 answered，不再打扰）/ 中止·收场（不记账）
+      if (message.includes('skipped') && store !== undefined) {
+        store.set(contextId, { answered: true, updatedAt: Date.now() })
+        console.log(`[dsh-a2a-server] 首选定被跳过，按缺省继续并记账（不再打扰）: context=${contextId}`)
+      } else {
+        console.warn(`[dsh-a2a-server] 首选定未完成，回落缺省（不记账）: ${message}`)
+      }
+      return effectiveRequestOptions(explicit, store?.get(contextId))
+    }
+  }
+
+  /** 首选定选项来源：现有工作区名册（title + canonical path） */
+  private workspaceChoices(): WorkspaceChoice[] {
+    const registry = this.ctx.get('workspaceRegistry') as WorkspaceRegistryView | undefined
+    return (registry?.list?.() ?? [])
+      .filter((workspace) => typeof workspace.path === 'string')
+      .map((workspace) => ({ title: workspace.title ?? '', path: workspace.path }))
   }
 
   /**
@@ -826,8 +914,13 @@ class DshAgentExecutor implements AgentExecutor {
     // 提前返回时 SDK 收掉仍在跑的总线）；**认领表只在客户端声明过问答能力时登记**，
     // 未声明的调用方保持现状行为（提问以 NO_PROVIDER 立刻失败，绝不无声挂起）。
     const agentKey = handle.agent as unknown as object
-    const drain = Promise.withResolvers<void>()
-    taskDrains.set(questionSink.taskId, { promise: drain.promise, release: () => { drain.resolve() } })
+    // 首选定在会话创建前就要保持续投流可接收 → 该已完成登记的沿用同一份（幂等复用）
+    let drainEntry = taskDrains.get(questionSink.taskId)
+    if (drainEntry === undefined) {
+      const drain = Promise.withResolvers<void>()
+      drainEntry = { promise: drain.promise, release: () => { drain.resolve() } }
+      taskDrains.set(questionSink.taskId, drainEntry)
+    }
     if (questionSink.qna === true) {
       ownedTaskByAgent.set(agentKey, questionSink)
     } else {
@@ -1017,7 +1110,7 @@ class DshAgentExecutor implements AgentExecutor {
       ownedTaskByAgent.delete(agentKey)
       taskDrains.delete(questionSink.taskId)
       abandonQuestions(questionSink.taskId)
-      drain.resolve()
+      drainEntry?.release()
       // 跨重启 resume 依赖会话已持久化：任务毕 flush，再释放句柄
       try {
         await (this.ctx.get('sessions') as { flush?: (s: unknown) => Promise<unknown> } | undefined)?.flush?.(handle.agent.session)
@@ -1158,6 +1251,7 @@ function applyResolvedConfig(resolved: A2ASettings): void {
   runtimeConfig.contextMapPath = r.contextMapPath
   runtimeConfig.contextMapTtlDays = r.contextMapTtlDays ?? 7
   runtimeConfig.settleCapMs = r.settleCapMs ?? DEFAULT_SETTLE_CAP_MS
+  runtimeConfig.firstUseSelection = r.firstUseSelection === 'ask' ? 'ask' : 'off'
   // 环境变量是最简外部通道，优先级最高（settings 写入也压不过它）
   if (process.env.A2A_SERVER_TOKEN) runtimeConfig.authToken = process.env.A2A_SERVER_TOKEN
   // 每次配置被应用时打一行不含任何密钥的信息日志（authToken 只报有无）
@@ -1168,6 +1262,7 @@ function applyResolvedConfig(resolved: A2ASettings): void {
     ` contextMapPath=${runtimeConfig.contextMapPath ?? '(default)'}` +
     ` contextMapTtlDays=${runtimeConfig.contextMapTtlDays}` +
     ` settleCapMs=${runtimeConfig.settleCapMs}` +
+    ` firstUseSelection=${runtimeConfig.firstUseSelection}` +
     ` authToken=${runtimeConfig.authToken ? '<set>' : '<unset>'}`,
   )
 }
@@ -1237,6 +1332,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   contextMapPath = runtimeConfig.contextMapPath
     ?? (dshHome ? dshHome('storages', 'a2a-context-map.json') : join(homedir(), '.dsh', 'storages', 'a2a-context-map.json'))
   await loadContextMap()
+  // §2.2/§2.3：绑定账本与 contextMap 同目录、独立文件（不动既有映射格式）
+  const linkStatePath = join(dirname(contextMapPath ?? join(homedir(), '.dsh', 'storages', 'a2a-context-map.json')), 'a2a-link-state.json')
+  bindingStore = await loadBindingStore(linkStatePath, (message: string) => { console.warn(message) })
 
   const host = runtimeConfig.host ?? '127.0.0.1'
   const port = runtimeConfig.port ?? (await probePort())
@@ -1381,6 +1479,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     return () => {
       server.close()
       contextMap.clear()
+      // 落盘未完成的绑定写入（幂等；失败只记日志）
+      void bindingStore?.flush().catch((e: unknown) => { console.warn('[dsh-a2a-server] 绑定账本落盘失败:', e) })
     }
   }, 'dsh-a2a-server')
 }

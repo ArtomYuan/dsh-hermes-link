@@ -19,8 +19,12 @@ import { defineConfig } from 'tsdown'
 // 挂起-解挂-放弃，零 dsh 运行时依赖），单独成 lib/questions.js 供 tests/questions.test.mjs 单测。
 // `src/request-options.ts` 同理：§2.1/§2.4 请求级选项（工作区解析 / 沙箱档落地，
 // 依赖注入、零 dsh 运行时），单独成 lib/request-options.js 供 tests/request-options.test.mjs 单测。
+// `src/link-protocol.ts`：链路协议常量生成物（源 protocol/link-protocol.json），
+// 单独成 lib/link-protocol.js 供 tests/contract/ 的 Node 侧契约跑器与漂移校验 import。
+// `src/link-binding.ts` 同理：§2.2/§2.3 首选定与绑定记忆（依赖注入、零 dsh 运行时），
+// 单独成 lib/link-binding.js 供 tests/link-binding.test.mjs 单测。
 export default defineConfig({
-  entry: ['src/index.ts', 'src/compat.ts', 'src/settle.ts', 'src/questions.ts', 'src/request-options.ts', 'src/client/mount-strategy.ts', 'src/client/primitive-symbols.ts'],
+  entry: ['src/index.ts', 'src/compat.ts', 'src/settle.ts', 'src/questions.ts', 'src/request-options.ts', 'src/link-protocol.ts', 'src/link-binding.ts', 'src/client/mount-strategy.ts', 'src/client/primitive-symbols.ts'],
   outDir: 'lib',
   format: ['esm'],
   platform: 'node',

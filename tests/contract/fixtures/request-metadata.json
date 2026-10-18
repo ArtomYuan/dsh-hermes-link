@@ -1,0 +1,6 @@
+{
+  "name": "request-metadata：工具参数 → metadata → 服务端请求选项",
+  "tool_args": {"agent": "dsh", "message": "hi", "workspace": "我的书", "sandbox": "workspace-write"},
+  "metadata": {"x-dsh-workspace": "我的书", "x-dsh-sandbox": "workspace-write"},
+  "node_options": {"workspace": {"kind": "name", "name": "我的书"}, "sandbox": "workspace-write"}
+}

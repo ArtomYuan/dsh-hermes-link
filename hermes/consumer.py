@@ -74,7 +74,27 @@ def _import_qna():
 
 _QNA_MODULE: Any = None
 
-A2A_PROTOCOL_VERSION = "1.0"
+def _load_link_protocol():
+    """惰性加载链路协议常量模块（包内相对导入优先；按文件路径加载时回退）。"""
+    try:
+        from . import link_protocol as _protocol
+        return _protocol
+    except (ImportError, ValueError):
+        import importlib.util
+        import os
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "link_protocol.py")
+        spec = importlib.util.spec_from_file_location("hermes_a2a_bridge.link_protocol", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+_P = _load_link_protocol()
+
+A2A_PROTOCOL_VERSION = _P.A2A_VERSION
+# 链路协议版本（两端同号握手用；见 protocol/link-protocol.json）
+LINK_PROTOCOL_VERSION = _P.PROTOCOL_VERSION
 _DEFAULT_TIMEOUT = 300
 
 # 配置门控常量：collector（直播消费者）默认关。register() 读
@@ -82,20 +102,20 @@ _DEFAULT_TIMEOUT = 300
 DEFAULT_ENABLED = False
 
 # 触发 text 缓冲 flush 的终态（status 终态；turn_end 单独处理）。
-_TERMINAL_STATES = frozenset({"completed", "failed", "canceled"})
+_TERMINAL_STATES = frozenset(_P.TERMINAL_TASK_STATES)
 
 # §2.6 问答能力声明键：随首投 message.metadata 带上，服务端据此决定是否认领提问。
-QNA_OPT_IN_KEY = "x-dsh-user-questions"
+QNA_OPT_IN_KEY = _P.METADATA_USER_QUESTIONS
 
 # §2.1/§2.4 请求级选项键：同样走 message.metadata（缺省不带＝现状）。
 # 服务端（dsh-a2a-server src/request-options.ts）按同名字面量读取；两侧有用例锁一致。
-WORKSPACE_META_KEY = "x-dsh-workspace"
-SANDBOX_META_KEY = "x-dsh-sandbox"
+WORKSPACE_META_KEY = _P.METADATA_WORKSPACE
+SANDBOX_META_KEY = _P.METADATA_SANDBOX
 # dsh 三档沙箱枚举（本部署 permission-presets 表键与之同名）
-SANDBOX_TIERS = ("read-only", "workspace-write", "danger-full-access")
+SANDBOX_TIERS = _P.SANDBOX_TIERS
 
 # A2A 终态 → dsh ``TurnEndReason``（收束行文案用；对齐 dsh-session 的 reason 并集）。
-_STATUS_REASON = {"completed": "completed", "failed": "error", "canceled": "aborted"}
+_STATUS_REASON = dict(_P.STATUS_REASONS)
 
 # --------------------------------------------------------------------------
 # dsh 行渲染（v0.7.0）：逐行复刻 dsh 客户端「工作步骤展示」的行形态。
@@ -256,7 +276,7 @@ def _short_state(state: Any) -> str:
     """``TASK_STATE_WORKING`` -> ``working``（也放行已是小写的状态）。"""
     if not state:
         return ""
-    return str(state).replace("TASK_STATE_", "").replace("_", "-").lower()
+    return str(state).replace(_P.TASK_STATE_PREFIX, "").replace("_", "-").lower()
 
 
 # --------------------------------------------------------------------------
@@ -331,7 +351,7 @@ def _normalize_data_part(
         return None
     kind = value.get("kind")
     turn = value.get("turn")
-    if kind == "question":
+    if kind == _P.EVENT_QUESTION:
         # §2.6：服务端在提问挂起时发的 question 事件；**必须**在上层任何门控之前处理，
         # 否则安静模式下会被跳过、任务永久悬挂（见 consume_stream 的注释）。
         return {
@@ -341,25 +361,25 @@ def _normalize_data_part(
             "task_id": value.get("taskId", ""),
             "turn": turn,
         }
-    if kind == "thinking":
+    if kind == _P.EVENT_THINKING:
         return {"type": "thinking", "text": value.get("text", ""), "turn": turn}
-    if kind == "tool_call":
+    if kind == _P.EVENT_TOOL_CALL:
         return {
             "type": "tool_call",
             "name": value.get("name", ""),
             "arguments": value.get("arguments", ""),
             "turn": turn,
         }
-    if kind == "tool_result":
+    if kind == _P.EVENT_TOOL_RESULT:
         return {
             "type": "tool_result",
             "name": value.get("name", ""),
             "text": value.get("text", ""),
             "turn": turn,
         }
-    if kind == "turn_start":
+    if kind == _P.EVENT_TURN_START:
         return {"type": "turn_start", "turn": turn}
-    if kind == "turn_end":
+    if kind == _P.EVENT_TURN_END:
         return {"type": "turn_end", "turn": turn, "reason": value.get("reason", "")}
     if kind == "text":
         return {"type": "text", "text": value.get("text", ""), "final": bool(last_chunk)}

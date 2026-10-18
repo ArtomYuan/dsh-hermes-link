@@ -404,11 +404,32 @@ def _ensure_ask_action_handler(platform: str) -> None:
     logger.info("hermes-a2a-bridge: 问答卡回调已挂到 %s 适配器（同进程直连）", platform)
 
 
+def _load_link_protocol():
+    """惰性加载链路协议常量模块（包内相对导入优先；按文件路径加载时回退）。"""
+    try:
+        from . import link_protocol as _protocol
+        return _protocol
+    except (ImportError, ValueError):
+        import importlib.util
+        import os
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "link_protocol.py")
+        spec = importlib.util.spec_from_file_location("hermes_a2a_bridge.link_protocol", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+_P = _load_link_protocol()
+
+
 # §2.1/§2.4 请求级选项：a2a_call 的透传参数名 → A2A message.metadata 键。
 # 与 consumer 侧同名字面量（两侧有用例锁一致）；服务端 dsh-a2a-server 按同名键读取。
-WORKSPACE_META_KEY = "x-dsh-workspace"
-SANDBOX_META_KEY = "x-dsh-sandbox"
-SANDBOX_TIERS = ("read-only", "workspace-write", "danger-full-access")
+WORKSPACE_META_KEY = _P.METADATA_WORKSPACE
+SANDBOX_META_KEY = _P.METADATA_SANDBOX
+SANDBOX_TIERS = _P.SANDBOX_TIERS
+# 链路协议版本（与 consumer / 服务端同源；verify.sh 握手用）
+LINK_PROTOCOL_VERSION = _P.PROTOCOL_VERSION
 
 
 def _extract_request_meta(args: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:

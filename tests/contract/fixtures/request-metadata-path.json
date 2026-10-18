@@ -1,0 +1,6 @@
+{
+  "name": "request-metadata（绝对路径形态 + null 缺省）",
+  "tool_args": {"workspace": "/srv/books/甲书", "sandbox": null},
+  "metadata": {"x-dsh-workspace": "/srv/books/甲书"},
+  "node_options": {"workspace": {"kind": "path", "path": "/srv/books/甲书"}}
+}

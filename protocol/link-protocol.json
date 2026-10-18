@@ -1,0 +1,62 @@
+{
+  "protocolVersion": 1,
+  "a2aVersion": "1.0",
+  "metadataKeys": {
+    "workspace": "x-dsh-workspace",
+    "sandbox": "x-dsh-sandbox",
+    "userQuestions": "x-dsh-user-questions"
+  },
+  "sandboxTiers": [
+    "read-only",
+    "workspace-write",
+    "danger-full-access"
+  ],
+  "cardActionKey": "hermes_ask_action",
+  "cardActions": [
+    "pick",
+    "submit",
+    "skip"
+  ],
+  "eventTypes": {
+    "thinking": "thinking",
+    "toolCall": "tool_call",
+    "toolResult": "tool_result",
+    "turnStart": "turn_start",
+    "turnEnd": "turn_end",
+    "text": "text",
+    "status": "status",
+    "question": "question"
+  },
+  "payloadKinds": {
+    "question": "question",
+    "questionAnswer": "question-answer"
+  },
+  "questionFieldNames": {
+    "askId": "askId",
+    "questions": "questions",
+    "taskId": "taskId",
+    "contextId": "contextId",
+    "answers": "answers",
+    "skipped": "skipped",
+    "selected": "selected",
+    "custom": "custom"
+  },
+  "terminalTaskStates": [
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "taskStatePrefix": "TASK_STATE_",
+  "statusReasons": {
+    "completed": "completed",
+    "failed": "error",
+    "canceled": "aborted"
+  },
+  "cardValueFields": {
+    "askAction": "hermes_ask_action",
+    "askId": "ask_id",
+    "qid": "qid",
+    "choice": "choice",
+    "label": "label"
+  }
+}

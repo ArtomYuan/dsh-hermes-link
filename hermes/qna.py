@@ -31,8 +31,26 @@ from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
+def _load_link_protocol():
+    """惰性加载链路协议常量模块（包内相对导入优先；按文件路径加载时回退）。"""
+    try:
+        from . import link_protocol as _protocol
+        return _protocol
+    except (ImportError, ValueError):
+        import importlib.util
+        import os
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "link_protocol.py")
+        spec = importlib.util.spec_from_file_location("hermes_a2a_bridge.link_protocol", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+_P = _load_link_protocol()
+
 # 适配器分支判据：正式命名空间（试验钩子用 hermes_qa_card_action，已废弃）
-ASK_ACTION_KEY = "hermes_ask_action"
+ASK_ACTION_KEY = _P.CARD_ACTION_KEY
 # 卡片预算（附录 A 硬规则）
 MAX_CARD_BYTES = 30720
 MAX_CARD_COMPONENTS = 200
@@ -513,9 +531,11 @@ def answer_stream_body(
       人读摘要（进 task.history，便于事后对账）；
     - 跳过时带 ``skipped=true``，服务端把该提问以「用户跳过」中止收口。
     """
-    payload: Dict[str, Any] = {"kind": "question-answer", "askId": ask_id, "answers": answers}
+    payload: Dict[str, Any] = {
+        "kind": _P.KIND_QUESTION_ANSWER, _P.FIELD_ASK_ID: ask_id, _P.FIELD_ANSWERS: answers,
+    }
     if skipped:
-        payload["skipped"] = True
+        payload[_P.FIELD_SKIPPED] = True
     summary = "跳过作答" if skipped else "；".join(
         f"{a.get('id')}: {'、'.join(a.get('selected') or []) or (a.get('custom') or '空')}"
         for a in answers

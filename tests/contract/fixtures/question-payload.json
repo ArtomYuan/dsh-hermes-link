@@ -1,0 +1,18 @@
+{
+  "name": "question payload：服务端生产载荷 → 线上 data part → 桥解析为 question 事件",
+  "ask_id": "ask-1",
+  "task_id": "task-1",
+  "context_id": "feishu/oc_x/omt_y",
+  "questions": [
+    {"id": "q1", "question": "走哪条路？", "options": [{"label": "甲"}, {"label": "乙"}], "multiSelect": true}
+  ],
+  "expect_payload": {
+    "kind": "question",
+    "askId": "ask-1",
+    "taskId": "task-1",
+    "contextId": "feishu/oc_x/omt_y",
+    "questions": [
+      {"id": "q1", "question": "走哪条路？", "options": [{"label": "甲"}, {"label": "乙"}], "multiSelect": true}
+    ]
+  }
+}

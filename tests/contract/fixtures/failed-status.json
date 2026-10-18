@@ -1,0 +1,18 @@
+{
+  "name": "failed status：服务端 FAILED 状态消息 → 桥失败原因",
+  "frame": {
+    "statusUpdate": {
+      "taskId": "task-1",
+      "status": {
+        "state": "TASK_STATE_FAILED",
+        "message": {
+          "role": "ROLE_AGENT",
+          "messageId": "m-err",
+          "parts": [{"text": "Agent execution error: 未知沙箱档 \"root\"", "mediaType": "text/plain"}]
+        }
+      }
+    }
+  },
+  "expect_state": "failed",
+  "expect_reason": "Agent execution error: 未知沙箱档 \"root\""
+}

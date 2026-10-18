@@ -25,6 +25,7 @@ const ALL_FIELDS = [
   'contextMapPath',
   'contextMapTtlDays',
   'settleCapMs',
+  'firstUseSelection',
 ]
 
 // ── A2AConfigSchema（= Config）校验行为 ──────────────────────────────────
@@ -76,7 +77,7 @@ test('Config: .volatile() 字段产出引用对象，plain SettingsSchema 产出
   assert.equal(plain.provider, 'deepseek-official')
 })
 
-test('单一事实来源不漂移: Config 与 SettingsSchema 同 10 字段', () => {
+test('单一事实来源不漂移: Config 与 SettingsSchema 同 11 字段', () => {
   assert.deepEqual(Object.keys(SettingsSchema.dict).sort(), [...ALL_FIELDS].sort())
   assert.deepEqual(Object.keys(Config.dict).sort(), [...ALL_FIELDS].sort())
 })
@@ -106,7 +107,7 @@ test('导出契约: Config 有 toJSON（0.2.0 schema(entry) 的门槛）', () =>
   assert.equal(typeof Config.toJSON, 'function')
 })
 
-test('导出契约: 复刻 volatileForm 收集逻辑能收集到全部 10 个字段', () => {
+test('导出契约: 复刻 volatileForm 收集逻辑能收集到全部 11 个字段', () => {
   const fields = collectVolatileFields(Config)
   assert.ok(fields !== undefined, 'volatileForm 不应返回 undefined（有 volatile 字段）')
   assert.deepEqual(Object.keys(fields).sort(), [...ALL_FIELDS].sort())

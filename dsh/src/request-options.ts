@@ -32,14 +32,16 @@
  */
 
 import { basename, isAbsolute, join, normalize, sep } from 'node:path'
+import {
+  SANDBOX_META_KEY,
+  SANDBOX_TIERS,
+  WORKSPACE_META_KEY,
+} from './link-protocol.ts'
+import type { SandboxTier } from './link-protocol.ts'
 
-/** 请求级选项的 metadata 键（与桥侧 `consumer.QNA_*` 同一通道约定） */
-export const WORKSPACE_META_KEY = 'x-dsh-workspace'
-export const SANDBOX_META_KEY = 'x-dsh-sandbox'
-
-/** dsh 三档沙箱枚举（本部署的 `permission-presets` 表键与之同名） */
-export const SANDBOX_TIERS = ['read-only', 'workspace-write', 'danger-full-access'] as const
-export type SandboxTier = (typeof SANDBOX_TIERS)[number]
+// 对外契约不变：键与档位仍从本模块导出（既有测试/调用方零改动），值来自协议单一来源。
+export { SANDBOX_META_KEY, SANDBOX_TIERS, WORKSPACE_META_KEY }
+export type { SandboxTier }
 
 /** 工作区名长度上限（目录名片段，非路径） */
 export const WORKSPACE_NAME_MAX = 64

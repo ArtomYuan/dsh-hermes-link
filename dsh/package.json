@@ -35,7 +35,7 @@
     "build:host": "tsdown --config tsdown.prepare.config.ts",
     "build:client": "tsdown --config tsdown.client.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "test": "pnpm run build:host && node --test tests/compat.test.mjs tests/settings.test.mjs tests/volatile.test.mjs tests/mount-strategy.test.mjs tests/primitive-symbols.test.mjs tests/settle-window.test.mjs tests/questions.test.mjs tests/qna-continuation.test.mjs tests/request-options.test.mjs tests/request-options-contract.test.mjs"
+    "test": "pnpm run build:host && node --test tests/compat.test.mjs tests/settings.test.mjs tests/volatile.test.mjs tests/mount-strategy.test.mjs tests/primitive-symbols.test.mjs tests/settle-window.test.mjs tests/questions.test.mjs tests/qna-continuation.test.mjs tests/request-options.test.mjs tests/request-options-contract.test.mjs tests/link-binding.test.mjs"
   },
   "license": "GPL-3.0",
   "dsh": {

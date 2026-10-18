@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto'
 import { Role, TaskState } from '@a2a-js/sdk'
 import type { Part } from '@a2a-js/sdk'
 import { AgentEvent } from '@a2a-js/sdk/server'
+import { PAYLOAD_KINDS, QUESTION_FIELDS } from './link-protocol.ts'
 import type { ExecutionEventBus } from '@a2a-js/sdk/server'
 
 /** 提问项（结构化透传；字段与 dsh `ask_user_question` 入参一一对应） */
@@ -116,7 +117,13 @@ export function toQuestionItems(raw: unknown): QuestionItem[] {
 
 /** 提问载荷：桥的建卡依据，同时进 INPUT_REQUIRED 状态消息供 `tasks/get` 查挂起 */
 export function questionPayload(askId: string, taskId: string, contextId: string, items: QuestionItem[]) {
-  return { kind: 'question', askId, taskId, contextId, questions: items }
+  return {
+    kind: PAYLOAD_KINDS.question,
+    [QUESTION_FIELDS.askId]: askId,
+    [QUESTION_FIELDS.taskId]: taskId,
+    [QUESTION_FIELDS.contextId]: contextId,
+    [QUESTION_FIELDS.questions]: items,
+  }
 }
 
 /** 造一条 agent 侧消息（状态消息载体；role/data part 形状与 dsh 侧一致） */

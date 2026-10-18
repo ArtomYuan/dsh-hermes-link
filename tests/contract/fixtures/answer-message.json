@@ -1,0 +1,12 @@
+{
+  "name": "answer message：桥续投报文 ↔ 服务端作答解析",
+  "ask_id": "ask-1",
+  "task_id": "task-1",
+  "context_id": "feishu/oc_x",
+  "answers": [{"id": "q1", "selected": ["甲"], "custom": "备注"}],
+  "expect_data_part": {
+    "kind": "question-answer",
+    "askId": "ask-1",
+    "answers": [{"id": "q1", "selected": ["甲"], "custom": "备注"}]
+  }
+}
