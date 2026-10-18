@@ -1,0 +1,12 @@
+# Standalone-package workspace marker. This file stops pnpm from walking up
+# to the harness monorepo workspace (the worktree lives under ~/.dsh/), which
+# would otherwise reconcile this package's deps into the main repo's
+# pnpm-lock.yaml. Keeping the A2A bundle isolated means `pnpm install` here
+# never touches the main repo.
+packages:
+  - .
+
+minimumReleaseAgeExclude:
+  - '@rolldown/binding-openharmony-arm64@1.2.8'
+
+nodeLinker: hoisted

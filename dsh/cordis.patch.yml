@@ -1,0 +1,15 @@
+# dsh-a2a-server bundle patch: inserts the A2A server plugin over a dsh-base
+# composition. dsh-base provides the agent spine (ctx.agents), an LLM adapter,
+# and the session surface.
+#
+# `id` is the stable logical row id in the composed cordis.yml; `name` is the
+# npm package name the Loader resolves (this package).
+#
+# NOTE: this bundle deliberately does NOT insert the `agent-presets` row. That
+# row is already provided by full profiles (the web-app bundle inserts it) and
+# by the dsh-acp-enhanced bundle; inserting it again here would duplicate the
+# entry id and fail the load. dsh-base-only profiles that need `ctx.agentPresets`
+# must add the `agent-presets` row themselves in their profile patch layer.
+- insert:
+    - id: a2a-server
+      name: '@artomyuan/dsh-a2a-server'
