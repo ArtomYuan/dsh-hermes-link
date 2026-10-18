@@ -404,6 +404,46 @@ def _ensure_ask_action_handler(platform: str) -> None:
     logger.info("hermes-a2a-bridge: 问答卡回调已挂到 %s 适配器（同进程直连）", platform)
 
 
+# §2.1/§2.4 请求级选项：a2a_call 的透传参数名 → A2A message.metadata 键。
+# 与 consumer 侧同名字面量（两侧有用例锁一致）；服务端 dsh-a2a-server 按同名键读取。
+WORKSPACE_META_KEY = "x-dsh-workspace"
+SANDBOX_META_KEY = "x-dsh-sandbox"
+SANDBOX_TIERS = ("read-only", "workspace-write", "danger-full-access")
+
+
+def _extract_request_meta(args: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    """从 ``a2a_call`` 参数提取工作区 / 沙箱档 → ``(metadata 片段, 错误说明)``。
+
+    缺省＝空片段（现状不动）；**出现即校验**，非法一律返回错误说明由调用方 block——
+    绝不「静默改用默认值」（那会让人以为参数生效了）。
+    """
+    meta: Dict[str, Any] = {}
+    workspace_raw = args.get("workspace")
+    if workspace_raw is not None:
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            return {}, "workspace 必须是非空字符串（工作区名字，或绝对路径）"
+        meta[WORKSPACE_META_KEY] = workspace_raw.strip()
+    sandbox_raw = args.get("sandbox")
+    if sandbox_raw is not None:
+        sandbox = sandbox_raw.strip() if isinstance(sandbox_raw, str) else ""
+        if sandbox not in SANDBOX_TIERS:
+            return {}, (
+                f"未知沙箱档 {sandbox_raw!r}（可选：{' / '.join(SANDBOX_TIERS)}）"
+            )
+        meta[SANDBOX_META_KEY] = sandbox
+    return meta, None
+
+
+def _describe_request_meta(meta: Dict[str, Any]) -> str:
+    """回执里的人读摘要（空片段 → 空串）"""
+    parts = []
+    if WORKSPACE_META_KEY in meta:
+        parts.append(f"工作区={meta[WORKSPACE_META_KEY]}")
+    if SANDBOX_META_KEY in meta:
+        parts.append(f"沙箱={meta[SANDBOX_META_KEY]}")
+    return "、".join(parts)
+
+
 def _coerce_timeout(value: Any, default: float) -> float:
     """把 peer 配置的 ``timeout`` 转为正数（int/float）；非法 / 缺失 / <=0 回退 ``default``。"""
     if value is None:
@@ -417,7 +457,9 @@ def _coerce_timeout(value: Any, default: float) -> float:
     return int(v) if v.is_integer() else v
 
 
-def _stream_dsh_call(message: str, context_id: str) -> str:
+def _stream_dsh_call(
+    message: str, context_id: str, request_meta: Optional[Dict[str, Any]] = None,
+) -> str:
     """对 dsh 发一条 ``SendStreamingMessage``，边消费 SSE 边直播，返回格式化最终文本。
 
     仅在 collector 门控 + dsh 目标 + 消息面 origin 非空 + message 非空时由
@@ -495,21 +537,26 @@ def _stream_dsh_call(message: str, context_id: str) -> str:
     # §2.6：直播起手前把问答卡片回调挂到适配器（幂等）——提问卡一旦发出，点击就得有归途。
     if live_routable:
         _ensure_ask_action_handler(platform)
-    stats = consumer.consume_stream(
-        url=url,
-        token=token,
-        message=message,
-        context_id=context_id,
-        platform=platform,
-        chat_id=chat_id,
-        thread_id=thread_id,
-        sender=sender,
-        min_interval=2.0,
-        timeout=timeout,
-        events=events,
-        level=level,
-        card=card,
-    )
+    # §2.1/§2.4：请求级选项随首投报文 metadata 带给服务端；缺省不传（保持旧调用形状，
+    # 既有 fake consumer 与既有用例零改动）。
+    consume_kwargs: Dict[str, Any] = {
+        "url": url,
+        "token": token,
+        "message": message,
+        "context_id": context_id,
+        "platform": platform,
+        "chat_id": chat_id,
+        "thread_id": thread_id,
+        "sender": sender,
+        "min_interval": 2.0,
+        "timeout": timeout,
+        "events": events,
+        "level": level,
+        "card": card,
+    }
+    if request_meta:
+        consume_kwargs["extra_metadata"] = request_meta
+    stats = consumer.consume_stream(**consume_kwargs)
     logger.info(
         "hermes-a2a-bridge: hook stream consumed events_seen=%s messages_sent=%s "
         "final_text=%.80r",
@@ -521,6 +568,12 @@ def _stream_dsh_call(message: str, context_id: str) -> str:
     states = stats.get("states") or []
     state = states[-1] if states else ""
     final_text = stats.get("final_text") or ""
+    # 终态失败/取消且无正文时，用服务端给的原因顶上——否则线路只看到「无文本输出」，
+    # 非法参数（服务端校验）之类的原因就丢了（2026-10-18 核验指出）。
+    failure_reason = stats.get("failure_reason") or ""
+    if not final_text and failure_reason:
+        final_text = f"⚠️ 任务{('已取消' if state == 'canceled' else '失败')}——原因：{failure_reason}"
+        logger.info("hermes-a2a-bridge: 任务终态无正文，已用服务端失败原因替代正文")
     header = f"[dsh · context {context_id or '(auto)'}"
     if state:
         header += f" · {state}"
@@ -639,19 +692,26 @@ def _deliver_final_result(
             )
 
 
-def _stream_worker(message: str, origin: str) -> None:
+def _stream_worker(
+    message: str, origin: str, request_meta: Optional[Dict[str, Any]] = None,
+) -> None:
     """后台线程体：跑一次完整流式（直播 + 结果送达），异常只记日志。"""
     try:
-        _stream_dsh_call(message, origin)
+        if request_meta:
+            _stream_dsh_call(message, origin, request_meta)
+        else:
+            _stream_dsh_call(message, origin)
     except Exception as exc:
         logger.warning("hermes-a2a-bridge: stream worker failed: %s", exc)
 
 
-def _spawn_stream_worker(message: str, origin: str) -> None:
+def _spawn_stream_worker(
+    message: str, origin: str, request_meta: Optional[Dict[str, Any]] = None,
+) -> None:
     """spawn 后台 daemon 线程跑 ``_stream_worker``（失败向上抛，触发同步回退）。"""
     thread = threading.Thread(
         target=_stream_worker,
-        args=(message, origin),
+        args=(message, origin) if not request_meta else (message, origin, request_meta),
         name="hermes-a2a-bridge-stream",
         daemon=True,
     )
@@ -683,6 +743,16 @@ def _on_pre_tool_call(
         return None
 
     args = args if isinstance(args, dict) else {}
+
+    # §2.1/§2.4：请求级选项（workspace / sandbox）。出现即校验，非法**立即 block**——
+    # 不静默改用默认值，否则调用方会误以为参数生效了。
+    request_meta, option_error = _extract_request_meta(args)
+    if option_error is not None:
+        logger.warning("hermes-a2a-bridge: a2a 参数不合法，已拒绝投递: %s", option_error)
+        return {
+            "action": "block",
+            "message": f"[a2a] ⚠️ 参数不合法：{option_error}——本次未投递。",
+        }
 
     # 显式 context_id（或 contextId 别名）：作为直播 origin 采用（不覆盖调用方意图）。
     explicit_raw = str(args.get("context_id") or args.get("contextId") or "").strip()
@@ -737,21 +807,30 @@ def _on_pre_tool_call(
         ).strip()
         if message:
             try:
-                _spawn_stream_worker(message, eff_origin)
+                if request_meta:
+                    _spawn_stream_worker(message, eff_origin, request_meta)
+                else:
+                    _spawn_stream_worker(message, eff_origin)
                 # 异步单执行（2026-09-15）：回调秒回受理回执，任务在后台直播 +
                 # 完成后结果自动送达；block 阻止原 a2a_call 执行（消除双执行）。
                 # 回执文案条件化（2026-10-10）：只有目标真能路由时才承诺「直播中 +
                 # 自动送达」；解析失败时如实警告，杜绝幽灵承诺。
+                option_note = _describe_request_meta(request_meta)
+                option_suffix = f"（{option_note}）" if option_note else ""
                 if live_target:
                     receipt = (
                         f"[dsh · context {eff_origin}] ⏳ 已受理——任务在后台执行，"
-                        "过程直播中；完成后结果会自动送达本对话。"
+                        f"过程直播中；完成后结果会自动送达本对话{option_suffix}。"
                     )
                 else:
+                    # 注意：origin 解析失败**不阻止投递**——工作区/沙箱档由服务端按 metadata
+                    # 生效，只是不直播、结果仅落工作区。故这里如实说明并附选项摘要（核验指出
+                    # 此前该分支既无摘要、又与文档"未生效即 block"的措辞不符）。
                     receipt = (
                         f"[dsh · context {eff_origin}] ⚠️ 会话标识无法解析"
                         f"（未能得出 platform/chat_id：{explicit_reason or origin_reason}），"
-                        "本次不直播、结果仅落工作区。"
+                        f"本次不直播、结果仅落工作区{option_suffix}；"
+                        "工作区/沙箱档参数仍会随 A2A 报文生效。"
                     )
                 return {"action": "block", "message": receipt}
             except Exception as exc:
@@ -761,6 +840,22 @@ def _on_pre_tool_call(
                 )
                 # 回退：落到下方「仅注入 origin」分支，让原 a2a_call 走同步
                 # SendMessage（功能不丢、无直播）。
+
+    # §2.1/§2.4：带了请求级选项却没走到流式投递（collector 关 / 非 dsh / origin 解析不出 /
+    # message 空 / 非 a2a_call）——**响亮拒绝**，否则调用方会以为工作区/档位已生效。
+    if request_meta:
+        logger.warning(
+            "hermes-a2a-bridge: 请求级选项未被生效路径消费（collector/目标/origin 不满足）: %s",
+            _describe_request_meta(request_meta),
+        )
+        return {
+            "action": "block",
+            "message": (
+                f"[a2a] ⚠️ {_describe_request_meta(request_meta)} 未生效：这些参数需要 "
+                "collector.enabled=true、目标为 dsh、且能解析出 platform/chat_id（走桥的流式投递）。"
+                "本次未投递，避免你以为参数已生效。"
+            ),
+        }
 
     # 其余（a2a_orchestrate / 非 dsh / collector 关 / 非 messaging / message 空）：
     # 仅 origin 注入。显式优先：调用方已给出 context_id 时不覆盖。

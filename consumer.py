@@ -87,6 +87,13 @@ _TERMINAL_STATES = frozenset({"completed", "failed", "canceled"})
 # §2.6 问答能力声明键：随首投 message.metadata 带上，服务端据此决定是否认领提问。
 QNA_OPT_IN_KEY = "x-dsh-user-questions"
 
+# §2.1/§2.4 请求级选项键：同样走 message.metadata（缺省不带＝现状）。
+# 服务端（dsh-a2a-server src/request-options.ts）按同名字面量读取；两侧有用例锁一致。
+WORKSPACE_META_KEY = "x-dsh-workspace"
+SANDBOX_META_KEY = "x-dsh-sandbox"
+# dsh 三档沙箱枚举（本部署 permission-presets 表键与之同名）
+SANDBOX_TIERS = ("read-only", "workspace-write", "danger-full-access")
+
 # A2A 终态 → dsh ``TurnEndReason``（收束行文案用；对齐 dsh-session 的 reason 并集）。
 _STATUS_REASON = {"completed": "completed", "failed": "error", "canceled": "aborted"}
 
@@ -229,6 +236,22 @@ def _new_request_id() -> str:
     return f"req-{time.time_ns()}"
 
 
+def _status_message_text(message: Any) -> str:
+    """从状态消息里取文本（A2A ``status.message.parts[].text``，按行拼接）。
+
+    服务端执行失败时 SDK 会合成 ``statusUpdate(FAILED)`` 且把原因放在状态消息的 text
+    part 里（如 ``Agent execution error: …``）。**不取它，失败原因就在桥侧被丢弃**，
+    线路只看到「任务已结束（失败）——本次无文本输出」。
+    """
+    if not isinstance(message, dict):
+        return ""
+    texts: list = []
+    for part in message.get("parts") or []:
+        if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"].strip():
+            texts.append(part["text"].strip())
+    return "\n".join(texts)
+
+
 def _short_state(state: Any) -> str:
     """``TASK_STATE_WORKING`` -> ``working``（也放行已是小写的状态）。"""
     if not state:
@@ -369,11 +392,17 @@ def normalize_events(results: Iterable[Dict[str, Any]]) -> Iterator[Dict[str, An
         if "statusUpdate" in result:
             su = result.get("statusUpdate")
             state = ""
+            message_text = ""
             if isinstance(su, dict):
                 status = su.get("status") or {}
                 if isinstance(status, dict):
                     state = _short_state(status.get("state"))
-            yield {"type": "status", "state": state}
+                    message_text = _status_message_text(status.get("message"))
+            # 只在真有原因时才带 message 键：不带时事件 dict 与升级前逐字一致（既有用例锁定）
+            status_event: Dict[str, Any] = {"type": "status", "state": state}
+            if message_text:
+                status_event["message"] = message_text
+            yield status_event
             continue
 
         if "artifactUpdate" in result:
@@ -1994,7 +2023,9 @@ def _send_aux_line(
         logger.warning("hermes-a2a-bridge: 提问状态行发送异常: %s", exc)
 
 
-def _streaming_message_body(message: str, context_id: str) -> Dict[str, Any]:
+def _streaming_message_body(
+    message: str, context_id: str, extra_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """构造 SendStreamingMessage 的 params（user message + contextId + 问答能力声明）。
 
     A2A v1.0 Part 的 JSON 序列化用判别字段名（text / data，非 ``content.$case``）；
@@ -2004,7 +2035,13 @@ def _streaming_message_body(message: str, context_id: str) -> Dict[str, Any]:
     ``metadata["x-dsh-user-questions"]=true`` 是 §2.6 的**能力声明**：服务端只认领
     声明过的调用方的提问——否则提问会被挂到没有作答能力的客户端上，而问答零超时＝
     无声挂死。旧服务端不认识该键，直接忽略，故对既有链路零影响。
+
+    ``extra_metadata`` 承载 §2.1/§2.4 的请求级选项（``x-dsh-workspace`` /
+    ``x-dsh-sandbox``）；缺省 ``None`` 时与升级前逐字一致（只有能力声明那一个键）。
     """
+    metadata: Dict[str, Any] = {QNA_OPT_IN_KEY: True}
+    if extra_metadata:
+        metadata.update(extra_metadata)
     return {
         "jsonrpc": "2.0",
         "id": _new_request_id(),
@@ -2017,8 +2054,8 @@ def _streaming_message_body(message: str, context_id: str) -> Dict[str, Any]:
                 ],
                 "messageId": uuid.uuid4().hex,
                 "contextId": context_id,
-                # 声明本客户端能接住「交互提问」并作答（飞书交互卡 + A2A 续投归途）
-                "metadata": {QNA_OPT_IN_KEY: True},
+                # 能力声明 + 请求级选项（工作区 / 沙箱档；缺省只有能力声明）
+                "metadata": metadata,
             }
         },
     }
@@ -2039,6 +2076,7 @@ def consume_stream(
     content: bool = DEFAULT_CONTENT,
     level: Optional[str] = None,
     card: Any = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """发 SendStreamingMessage → 解析 → 归一化 → 渲染 → 节流 → 发送，返回统计。
 
@@ -2072,6 +2110,8 @@ def consume_stream(
         "events_seen": 0,
         "messages_sent": 0,
         "states": [],
+        # 终态失败/取消时服务端给出的原因（取不到则空串）；供上层如实转述而不是"无文本输出"。
+        "failure_reason": "",
         # 发出去的 message_id 列表（plan §4.2 第 1 条：更新类方案的唯一前置）。
         "message_ids": [],
     }
@@ -2085,9 +2125,9 @@ def consume_stream(
         # §2.6：包一层可续接迭代器——提问答完后把「续投流」拼到当前流尾部，于是首跳
         # 解挂后的后续事件（artifact/completed）仍由本循环消费，任务收尾逻辑零改动。
         qna = _import_qna()
-        results = qna.ResumableStream(
-            iter_sse_data(url, _streaming_message_body(message, context_id), headers, timeout)
-        )
+        # §2.1/§2.4：请求级选项随首投报文 metadata 带给服务端（缺省不传＝现状）
+        body = _streaming_message_body(message, context_id, extra_metadata)
+        results = qna.ResumableStream(iter_sse_data(url, body, headers, timeout))
         for event in normalize_events(results):
             try:
                 stats["events_seen"] += 1
@@ -2111,6 +2151,8 @@ def consume_stream(
                     continue
                 if event.get("type") == "status":
                     stats["states"].append(event.get("state"))
+                    if event.get("state") in ("failed", "canceled") and event.get("message"):
+                        stats["failure_reason"] = event["message"]
                 if event.get("type") == "text" and event.get("final"):
                     stats["final_text"] = event.get("text") or ""
                 # 安静模式（events=false）：跳过中间事件，只推最终结果（final 文本 / 终态 status）。

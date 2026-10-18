@@ -204,6 +204,23 @@ place.
   loudly when a live stream starts, and the click branch acknowledges truthfully rather than
   faking success.
 
+## Workspace and sandbox-tier arguments (since v0.9.0, §2.1/§2.4)
+
+`a2a_call` accepts two optional arguments, carried to the server in the initial message's
+metadata:
+
+- `workspace`: a workspace **name** (exact match on title / directory name; created when
+  missing) or an **absolute path**;
+- `sandbox`: `read-only` / `workspace-write` / `danger-full-access` (applied as the session's
+  permission preset through the same write path as the GUI sandbox switch).
+
+**Without them nothing changes** (generic workspace, current tier). The options only take
+effect on the streaming delivery path (`collector.enabled=true` + dsh target + resolvable
+origin); otherwise the call is **blocked with an explanation** rather than silently ignored, and
+an invalid tier / empty workspace name is blocked up front while the finer workspace-shape rules
+are enforced by the server (the task closes as FAILED and the reason is returned to this line). Details (including "writes are confined, reads are not") in
+[CONFIGURATION.en.md](CONFIGURATION.en.md) "Request-level options: workspace and sandbox tier".
+
 ## Relationship with dsh-a2a-server
 
 This plugin and [dsh-a2a-server](https://github.com/ArtomYuan/dsh-a2a-server) are not

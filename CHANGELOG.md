@@ -7,6 +7,43 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.0] - 2026-10-18
+
+> §2.1 **工作区选择** ＋ §2.4 **沙箱档** 的**桥侧参数面**：`a2a_call` 新增两个可选参数
+> `workspace`（工作区名字或绝对路径）与 `sandbox`（三档枚举），随首投报文的
+> `message.metadata` 带给服务端（`x-dsh-workspace` / `x-dsh-sandbox`）。
+> **不带参数＝现状**：不新增/不删除配置键，通用区投递报文除既有能力声明外逐字不变。
+
+### Added
+
+- **`a2a_call` 请求级选项透传**：`workspace` / `sandbox` 经 `_extract_request_meta`
+  校验后放进首投 `message.metadata`（`consumer._streaming_message_body(extra_metadata=)`）。
+  与 §2.6 的能力声明共用同一条 metadata 通道。**注意**：旧服务端（<0.7.0）会忽略这两个
+  键（其自身行为不受影响），但调用方会以为参数生效——故部署必须**先服务端后桥**（见
+  CONFIGURATION 的版本要求）。
+- **拒绝纪律**：非法档位（不在 `read-only`/`workspace-write`/`danger-full-access` 内）、
+  非法工作区（非字符串 / 空 / 纯空白）**立即 block** 并给出可选值；带了参数却走不到
+  流式投递路径（`collector.enabled=false`、非 dsh 目标、origin 解析不出、message 为空）
+  也**明确 block 并说明原因**——绝不静默改用默认值（否则调用方会以为参数生效了）。
+- **回执可见**：受理回执里追加 `（工作区=…、沙箱=…）` **请求值**摘要（是否真落地由服务端
+  日志/结果验证；服务端还会在流里对"档位未落地"发文本告警）。
+- **失败原因转述（核验指出后补）**：桥此前只读 `statusUpdate.status.state`，把服务端
+  `FAILED` 的状态消息（含 `Agent execution error: …`）整条丢弃，线路只看到「无文本输出」。
+  现在 `normalize_events` 取下状态消息文本，`consume_stream` 记入
+  `stats["failure_reason"]`，`_stream_dsh_call` 在无正文时用它顶替正文——非法参数之类
+  的失败原因能真正回到本线。
+- 测试：`tests/test_request_options.py`（14 例：线上键字面量锁与两侧一致性、报文形状与
+  缺省不变、提取/校验、hook 传参与非 dsh/collector 关两种拒绝、形状规则交服务端的两层
+  设计、`consume_stream` 透传）、`tests/test_failure_reason.py`（4 例：服务端 FAILED 原因
+  的提取与送达）。
+
+### 配套
+
+- 需 `dsh-a2a-server` **≥0.7.0**（解析 metadata 里的请求级选项：工作区解析/建目录/登记、
+  沙箱档经 permission-presets 落成会话级覆盖）。
+- 服务端解析规则、读/写圈定口径与用法示例见 [CONFIGURATION.md](CONFIGURATION.md)
+  「请求级选项：工作区与沙箱档」。
+
 ## [0.8.0] - 2026-10-17
 
 > §2.6 **交互问答桥接**：dsh 在任务中途的 `ask_user_question` 不再无人应答——

@@ -7,6 +7,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-10-18
+
+> The **client-side surface** of §2.1 **workspace selection** and §2.4 **sandbox tier**:
+> `a2a_call` accepts two optional arguments, `workspace` (a workspace name or an absolute
+> path) and `sandbox` (three-tier enum), carried to the server in the initial message's
+> `message.metadata` (`x-dsh-workspace` / `x-dsh-sandbox`).
+> **Without them nothing changes**: no config key is added or removed, and generic-workspace
+> delivery messages stay byte-for-byte identical apart from the existing capability declaration.
+
+### Added
+
+- **Request-level option passthrough on `a2a_call`**: `workspace` / `sandbox` are validated
+  by `_extract_request_meta` and placed in the initial `message.metadata`
+  (`consumer._streaming_message_body(extra_metadata=)`). They share the §2.6 capability
+  declaration channel. **Note**: an older server (<0.7.0) ignores both keys (its own behaviour
+  is unaffected) while the caller believes the options applied — deployment must therefore
+  install the **server first, then the bridge** (see the version requirement in CONFIGURATION).
+- **Refusal discipline**: an invalid tier (not one of `read-only` / `workspace-write` /
+  `danger-full-access`) or an invalid workspace (non-string / empty / blank-only) is
+  **blocked immediately** with the accepted values; carrying the options while the streaming
+  path is not taken (`collector.enabled=false`, non-dsh target, unresolvable origin, empty
+  message) is also **blocked with the reason** — never silently downgraded to defaults, which
+  would let the caller believe the options applied.
+- **Visible receipt**: the acceptance receipt appends a `(workspace=…, sandbox=…)` summary of
+  the **requested values** (whether they actually landed is verified by server logs/results;
+  the server additionally emits a text warning in the stream when a tier cannot be applied).
+- **Failure reasons are relayed (added after review)**: the bridge used to read only
+  `statusUpdate.status.state` and discard the server's `FAILED` status message (which carries
+  `Agent execution error: …`), so the line only saw "no text output". Now `normalize_events`
+  extracts the status-message text, `consume_stream` records it in `stats["failure_reason"]`,
+  and `_stream_dsh_call` uses it as the body when there is none — failure causes (invalid
+  arguments and the like) actually reach the line.
+- Tests: `tests/test_request_options.py` (14 cases: wire-literal lock plus cross-module
+  consistency, message shape and unchanged default, extraction/validation, hook passthrough plus
+  the non-dsh / collector-off refusals, the delegated-shape two-layer design, `consume_stream`
+  passthrough) and `tests/test_failure_reason.py` (4 cases: extracting and relaying the server's
+  FAILED reason).
+
+### Companion
+
+- Requires `dsh-a2a-server` **≥0.7.0** (parses the request-level options from metadata:
+  workspace resolution/creation/registration; sandbox tier applied as a session-level override
+  through permission-presets).
+- Server-side resolution rules, read/write scoping and usage examples live in
+  [CONFIGURATION.en.md](CONFIGURATION.en.md) "Request-level options: workspace and sandbox tier".
+
 ## [0.8.0] - 2026-10-17
 
 > §2.6 **Interactive Q&A bridge**: a mid-task dsh `ask_user_question` is no longer

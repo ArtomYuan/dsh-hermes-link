@@ -159,6 +159,52 @@ handler），故弃用 override，改在 `pre_tool_call` hook 内做**单执行*
   退化为仅注入 origin，原 `a2a_call` 走同步 `SendMessage`，功能不丢（无直播但
   **无双执行**）。
 
+### 请求级选项：工作区与沙箱档（§2.1/§2.4，v0.9.0 起）
+
+`a2a_call` 可带两个**可选**参数，随首投报文的 `message.metadata` 传给服务端
+（`dsh-a2a-server` ≥0.7.0）；**不带即现状**，通用区投递行为逐字不变。
+
+| 参数 | 取值 | 服务端行为 |
+| --- | --- | --- |
+| `workspace` | 工作区**名字**，或**绝对路径** | 名字：先在现有工作区里按 title / 目录名精确匹配（唯一命中即用；多命中→报错不猜）；查无 → 在服务端 cwd 下建同名目录并登记。绝对路径：直接采用（不存在就建）。解析出的路径成为会话 cwd |
+| `sandbox` | `read-only` / `workspace-write` / `danger-full-access` | 经 dsh 的权限预设把该**会话**切到同档（与 GUI 手切沙箱同一条写路径；幂等）。本机部署下 `read-only`/`workspace-write` 配 `approval=ask`，`danger-full-access` 配 `never` |
+
+要点：
+
+- **参数只在流式投递路径生效**（`collector.enabled=true` + 目标为 dsh + 能解析出
+  `platform/chat_id`）。不满足时**明确 block 并说明原因**，绝不静默忽略——否则调用方
+  会以为参数生效了。
+- **校验分两层**：桥先挡「非法档位 / 空工作区名」并立即 block（给出可选值）；更细的
+  工作区形状规则（路径分隔符、`.`/`..`、长度、`..` 段等）由**服务端**统一校验，任务以
+  `FAILED` 收口，且**失败原因会随结果送回本线**（桥从 `statusUpdate(FAILED)` 的状态消息
+  里取 `Agent execution error: …` 作为正文，不再只报「本次无文本输出」）。
+- **工具 schema 现状（如实）**：`a2a_call` 的参数表由 Hermes 内置 `platforms/a2a` 插件定义
+  （只有 `agent`/`message`/`context_id`），**不在本插件与 dsh-a2a-server 的改动范围**。
+  因此这两个参数不会出现在工具的参考说明里——需要调用方（模型）**显式传参**（由线路
+  指令/提示要求，或后续给内置插件补 schema）。参数能透传（schema 未禁额外属性），
+  但"模型会不会自然想到传"不保证。
+- **版本要求**：服务端必须 `≥0.7.0`。桥**没有**运行时能力探测——0.6.0 服务端会忽略这两个
+  metadata 键，而桥回执仍会写「工作区=…、沙箱=…」。故部署必须**先服务端后桥**，并在
+  发首个带参调用前确认 `GET /.well-known/agent-card.json` 的 `version` 已是 0.7.x。
+- 会话复用键本就含 cwd：**同一对话换工作区＝新会话**，同区自然复用；串区由键本身挡住。
+- 沙箱档是会话级覆盖：后续调用带不同档位会**切换**该会话档位；不带就不动。
+- 「读」的圈定程度（2026-10-18 核验修正）：三档都**不限制读**；「只圈写」仅对
+  `read-only` / `workspace-write` 成立（`danger-full-access` **完全不圈**）。
+  `workspace-write` 的可写面除会话 cwd 外还包括 `/tmp`（bwrap 下是私有 tmpfs，
+  Landlock/Seatbelt 下是真实 `/tmp`）与 `os.tmpdir()`；子代理按 dsh 原生行为继承该档。
+- **绝对路径是显式逃生门**：服务端不做 allowlist；把 workspace 指到 `/` 再配
+  `workspace-write` 等于整盘可写——慎用。
+- **origin 解析不出时仍会投递**：工作区/沙箱档随 A2A 报文照常生效，只是不直播、结果仅落
+  工作区（回执会如实说明并附参数摘要）。
+- **待实弹核对**：本部署 `read-only`/`workspace-write` 配 `approval=ask`，而 A2A 路径没有
+  审批回答者；`workspace-write` 下常见写入是否被审批拦成「不可用」而非沙箱拒绝，需实测。
+
+用法示例（Hermes 侧模型调用 `a2a_call` 时带参）：
+
+```json
+{"agent": "dsh", "message": "把这一章扩写到 3000 字", "workspace": "我的书", "sandbox": "workspace-write"}
+```
+
 ### 受理回执与结果送达
 
 `pre_tool_call` hook 返回 `{"action": "block", "message": M}` 后，框架把 `M` 变成工具

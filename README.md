@@ -151,6 +151,21 @@ dsh 在任务中途用 `ask_user_question` 提问时，问题会以**飞书 2.0 
   命名空间 + 处理器注册表 + `is_ws_ready()`，见 `~/.hermes/docs/hermes/custom-patches.md`）。
   适配器补丁未打时，桥会在直播起手时响亮告警；点击分支由适配器侧如实换卡，不伪造成功。
 
+## 工作区与沙箱档参数（v0.9.0 起，§2.1/§2.4）
+
+`a2a_call` 可带两个可选参数，随首投报文的 metadata 传给服务端：
+
+- `workspace`：工作区**名字**（现有工作区按 title / 目录名精确匹配；查无则建）或**绝对路径**；
+- `sandbox`：`read-only` / `workspace-write` / `danger-full-access`（落到该会话的权限预设，
+  与 GUI 手切同一条写路径）。
+
+**不带参数＝现状**（通用区、当前档位）。参数只在流式投递路径生效
+（`collector.enabled=true` + dsh 目标）；不满足时**明确 block 并说明**。校验分两层：
+非法档位 / 空工作区名由桥立即 block，更细的工作区形状规则由服务端校验（任务 FAILED，
+**失败原因会送回本线**）。同一对话里「带 / 不带 workspace」会落到两个会话（跨调用记住
+选择属于 §2.2，本轮未做，故应每次带上）。细节（含「读不限制、只圈写」的口径）见
+[CONFIGURATION.md](CONFIGURATION.md)「请求级选项：工作区与沙箱档」。
+
 ## 流程图
 
 ![链路时序](assets/sequence-zh.png)

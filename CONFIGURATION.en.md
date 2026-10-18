@@ -211,6 +211,66 @@ the `pre_tool_call` hook:
   the original `a2a_call` run the synchronous `SendMessage` — functionality is
   preserved (no live output but **no double execution**).
 
+### Request-level options: workspace and sandbox tier (§2.1/§2.4, since v0.9.0)
+
+`a2a_call` accepts two **optional** arguments that travel in the initial message's
+`message.metadata` to the server (`dsh-a2a-server` ≥0.7.0). **Without them nothing changes** —
+delivery to the generic workspace is byte-for-byte the same as before.
+
+| Argument | Value | Server behaviour |
+| --- | --- | --- |
+| `workspace` | Workspace **name**, or an **absolute path** | Name: matched exactly against existing workspaces by title / directory name (unique hit wins; several hits → error, never a guess); no hit → a same-named directory is created under the server cwd and registered. Absolute path: used as-is (created if missing). The resolved path becomes the session cwd |
+| `sandbox` | `read-only` / `workspace-write` / `danger-full-access` | Switches that **session** to the same-named permission preset (the same write path as the GUI sandbox switch; idempotent). In this deployment `read-only`/`workspace-write` pair with `approval=ask`, `danger-full-access` with `never` |
+
+Notes:
+
+- The options only take effect on the **streaming delivery path** (`collector.enabled=true`
+  + dsh target + a resolvable `platform/chat_id`). When that path is not taken the call is
+  **blocked with an explanation** — never silently ignored, which would let the caller believe
+  the options applied.
+- **Validation has two layers**: the bridge blocks an invalid tier / empty workspace name
+  immediately (listing the accepted values); the finer workspace-shape rules (path separators,
+  `.`/`..`, length, `..` segments, …) are enforced by the **server**, which closes the task as
+  `FAILED` — and **the failure reason is returned to this line** (the bridge lifts
+  `Agent execution error: …` out of the `statusUpdate(FAILED)` status message instead of only
+  reporting "no text output").
+- **Tool schema status (honest)**: the `a2a_call` parameter schema belongs to Hermes' built-in
+  `platforms/a2a` plugin (`agent`/`message`/`context_id` only) and is **outside this plugin's and
+  dsh-a2a-server's change scope**. The two arguments therefore do not appear in the tool's
+  reference description — callers (models) must pass them **explicitly** (instructed by the line
+  or a prompt, or a later schema addition in the built-in plugin). Passthrough works (the schema
+  does not forbid extra properties), but "the model will naturally think of passing them" is not
+  guaranteed.
+- **Version requirement**: the server must be `≥0.7.0`. The bridge has **no runtime capability
+  probe** — a 0.6.0 server ignores both metadata keys while the bridge receipt still says
+  `(workspace=…, sandbox=…)`. Deployment must therefore install the **server first, then the
+  bridge**, and the first argument-carrying call should be preceded by checking that
+  `GET /.well-known/agent-card.json` reports `version` 0.7.x.
+- The session-reuse key already contains the cwd: **switching workspace in one conversation
+  opens a new session**, the same workspace reuses it; cross-workspace mixing is prevented by
+  the key itself.
+- The sandbox tier is a session-level override: a later call with a different tier **switches**
+  that session's tier; omitting it changes nothing.
+- Read scoping (corrected after review, 2026-10-18): none of the three tiers restricts reads;
+  "confines writes only" holds for `read-only` / `workspace-write` (`danger-full-access`
+  **confines nothing**). The `workspace-write` writable set includes, besides the session cwd,
+  `/tmp` (a private tmpfs under bwrap, the real `/tmp` under Landlock/Seatbelt) and
+  `os.tmpdir()`; subagents inherit the tier through native dsh behaviour.
+- **An absolute path is an explicit escape hatch**: the server keeps no allowlist; pointing
+  `workspace` at `/` with `workspace-write` makes the whole disk writable — use with care.
+- **An unresolvable origin still delivers**: the workspace/sandbox options still take effect
+  through the A2A message; the call is simply not live-streamed and the result only lands in the
+  workspace (the receipt says so and includes the option summary).
+- **To verify live**: this deployment pairs `read-only`/`workspace-write` with `approval=ask` and
+  the A2A path has no approval answerer; whether ordinary writes under `workspace-write` become
+  "unavailable" rather than a sandbox denial must be measured.
+
+Example (the Hermes-side model calls `a2a_call` with the arguments):
+
+```json
+{"agent": "dsh", "message": "expand this chapter to 3000 words", "workspace": "my-book", "sandbox": "workspace-write"}
+```
+
 ### Receipt & result delivery
 
 After the `pre_tool_call` hook returns `{"action": "block", "message": M}`, the
