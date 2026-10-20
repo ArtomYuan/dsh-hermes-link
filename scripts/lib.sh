@@ -92,4 +92,6 @@ agent_card_version() {
 
 port_listening() { ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN; }
 gateway_pid()    { pgrep -f 'hermes_cli\.main gate' | head -1 || true; }
-last_feishu_connected() { grep -h 'feishu connected' "$GATEWAY_LOG" 2>/dev/null | tail -1 || true; }
+# 注意：gateway.log 可能含二进制字节（崩溃堆栈/编码混杂），grep 默认二进制检测会截断匹配，
+# 导致 tail -1 停在很旧的一条 —— 必须 -a 当文本处理。
+last_feishu_connected() { grep -ah 'feishu connected' "$GATEWAY_LOG" 2>/dev/null | tail -1 || true; }
