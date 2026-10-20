@@ -16,7 +16,9 @@ done
 FAILED=0
 report() { # $1=状态 $2=项 $3=细节
   printf '%-4s %-22s %s\n' "$1" "$2" "$3"
-  [ "$1" = "FAIL" ] && FAILED=1
+  # 永远返回 0：调用处是 `cond && report OK … || report FAIL …`，若 OK 分支返回非零会双触发
+  if [ "$1" = "FAIL" ]; then FAILED=1; fi
+  return 0
 }
 
 say "════ dsh-hermes-link self-check ════"
@@ -37,7 +39,11 @@ else
   report FAIL "端口 $A2A_PORT" "未监听"
 fi
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$A2A_URL/.well-known/agent-card.json" || true)"
-[ "$code" = "200" ] || [ "$code" = "401" ] && report OK "agent-card HTTP" "$code（401=需 token，属正常）" || report FAIL "agent-card HTTP" "${code:-无响应}"
+if [ "$code" = "200" ] || [ "$code" = "401" ]; then
+  report OK "agent-card HTTP" "$code（401=需 token，属正常）"
+else
+  report FAIL "agent-card HTTP" "${code:-无响应}"
+fi
 
 # 3) 协议漂移（仓库工作树）
 if python3 "$ROOT/protocol/gen.py" --check >/dev/null 2>&1; then
