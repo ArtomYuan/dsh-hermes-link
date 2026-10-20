@@ -1,5 +1,5 @@
 /**
- * dsh-a2a-server — 在 dsh profile 内启动 A2A (Agent2Agent) server，把 dsh
+ * dsh-hermes-link — 在 dsh profile 内启动 A2A (Agent2Agent) server，把 dsh
  * agent 会话通过 A2A 协议暴露给远端 agent（如 Hermes）。
  *
  * P0 最小闭环：
@@ -110,7 +110,7 @@ import {
 const TURN_START_GRACE_MS = 2000
 
 /** Cordis 插件名 */
-export const name = '@artomyuan/dsh-a2a-server'
+export const name = '@artomyuan/dsh-hermes-link'
 
 /** 声明依赖的核心服务（必须与代码里的 ctx.get / 直接调用对齐） */
 export const inject = ['agents', 'agentPresets', 'sessions']
@@ -139,7 +139,7 @@ const executionMode = new AsyncLocalStorage<{ streaming: boolean }>()
  * ``{"x-dsh-user-questions": true}`` 时，本插件才认领该会话的提问。
  *
  * 为什么必须显式声明：「认领」＝由本插件接手作答，如果调用方根本没能力作答（不是
- * hermes-a2a-bridge，或桥没跑），提问就会被挂到一个永远收不到答案的地方——而问答
+ * dsh-hermes-link，或桥没跑），提问就会被挂到一个永远收不到答案的地方——而问答
  * 全程零超时，等于无声挂死。声明制让**缺省行为与今天一致**（提问照旧以 NO_PROVIDER
  * 立刻失败），只有声明过的调用方才进入问答桥接。
  */
@@ -238,7 +238,7 @@ async function attachToWorkspace(ctx: Context, canonical: string, sessionId: Ses
     const ws = await ensureWorkspace(ctx, canonical)
     if (ws?.attachSession) await ws.attachSession(sessionId)
   } catch (e) {
-    console.warn('[dsh-a2a-server] workspace attach failed:', (e as Error)?.message ?? e)
+    console.warn('[dsh-hermes-link] workspace attach failed:', (e as Error)?.message ?? e)
   }
 }
 
@@ -299,7 +299,7 @@ function cleanupContextMap(): number {
       removed++
     }
   }
-  if (removed > 0) console.log(`[dsh-a2a-server] context-map cleanup: removed ${removed} expired entries`)
+  if (removed > 0) console.log(`[dsh-hermes-link] context-map cleanup: removed ${removed} expired entries`)
   return removed
 }
 
@@ -326,7 +326,7 @@ async function loadContextMap(): Promise<void> {
     cleanupContextMap()
   } catch (e) {
     if ((e as { code?: string }).code !== 'ENOENT') {
-      console.warn('[dsh-a2a-server] context-map load failed:', (e as Error)?.message ?? e)
+      console.warn('[dsh-hermes-link] context-map load failed:', (e as Error)?.message ?? e)
     }
   }
 }
@@ -343,7 +343,7 @@ function persistContextMap(): Promise<void> {
       await writeFile(tmp, snapshot)
       await rename(tmp, contextMapPath)
     } catch (e) {
-      console.warn('[dsh-a2a-server] context-map persist failed:', (e as Error)?.message ?? e)
+      console.warn('[dsh-hermes-link] context-map persist failed:', (e as Error)?.message ?? e)
     }
   })
   return contextMapWriteChain
@@ -378,7 +378,7 @@ function agentComposition(ctx: Context) {
       // dsh rc.6 bug 兜底：setup 收到的 agent ctx 可能丢 scope tag，
       // 无 scope 时跳过挂载（降级为无工具 agent），避免整体崩溃
       if (scopeOf(agentCtx) === undefined) {
-        console.warn('[dsh-a2a-server] agent ctx unscoped; preset mount skipped')
+        console.warn('[dsh-hermes-link] agent ctx unscoped; preset mount skipped')
         return
       }
       await ctx.agentPresets.mount(agentCtx, runtimeConfig.preset)
@@ -486,26 +486,26 @@ function logSettleOutcome(sessionId: string, outcome: SettleOutcome): void {
     case 'quiesced':
       if (outcome.rounds > 0) {
         console.log(
-          `[dsh-a2a-server] lead ${sessionId} 静默：子代理已全部结算（等待 ${outcome.waitedMs}ms，`
+          `[dsh-hermes-link] lead ${sessionId} 静默：子代理已全部结算（等待 ${outcome.waitedMs}ms，`
             + `${outcome.rounds} 轮），现在释放句柄`,
         )
       }
       return
     case 'cap':
       console.warn(
-        `[dsh-a2a-server] lead ${sessionId} 等待子代理结算超上限（${outcome.waitedMs}ms，仍有 `
+        `[dsh-hermes-link] lead ${sessionId} 等待子代理结算超上限（${outcome.waitedMs}ms，仍有 `
           + `${outcome.liveChildren} 个活跃 continuable 子代理）：按兜底释放句柄；`
           + '晚到回传将由 dsh-subagent 队列补丁入队并在下次激活补投',
       )
       return
     case 'unavailable':
       console.warn(
-        `[dsh-a2a-server] lead ${sessionId} 无法判定子代理活口（listChildren 缺失或查询失败）：`
+        `[dsh-hermes-link] lead ${sessionId} 无法判定子代理活口（listChildren 缺失或查询失败）：`
           + '不等待，直接释放；回传兜底由 dsh-subagent 队列补丁承担',
       )
       return
     case 'disabled':
-      console.log(`[dsh-a2a-server] lead ${sessionId} 未启用结算等待（settleCapMs=0）：直接释放`)
+      console.log(`[dsh-hermes-link] lead ${sessionId} 未启用结算等待（settleCapMs=0）：直接释放`)
       return
   }
 }
@@ -545,7 +545,7 @@ async function resolveSession(
         .slice(0, 3)
         .join('\n  ')
       console.warn(
-        `[dsh-a2a-server] contextId resume failed — falling back to a NEW session (contextId mapping dropped)` +
+        `[dsh-hermes-link] contextId resume failed — falling back to a NEW session (contextId mapping dropped)` +
           `\n  name: ${err.name ?? '(unknown)'}, code: ${err.code ?? '(none)'}, message: ${err.message ?? String(e)}` +
           (stackHead ? `\n  stack:\n  ${stackHead}` : ''),
       )
@@ -565,7 +565,7 @@ async function resolveSession(
       const ws = await ensureWorkspace(ctx, cwd)
       if (ws?.attachSession) await ws.attachSession(newSessionId)
     } catch (e) {
-      console.warn('[dsh-a2a-server] workspace attach failed:', (e as Error)?.message ?? e)
+      console.warn('[dsh-hermes-link] workspace attach failed:', (e as Error)?.message ?? e)
     }
   })()
   return { sessionId: newSessionId, handle }
@@ -802,7 +802,7 @@ class DshAgentExecutor implements AgentExecutor {
       const next = bindingFromAnswers(answers, labels)
       store?.set(contextId, next)
       console.log(
-        `[dsh-a2a-server] 首选定已记账: context=${contextId} ` +
+        `[dsh-hermes-link] 首选定已记账: context=${contextId} ` +
         `workspace=${JSON.stringify(next.workspace ?? null)} sandbox=${next.sandbox ?? '(缺省)'}`,
       )
       return effectiveRequestOptions(explicit, next)
@@ -811,9 +811,9 @@ class DshAgentExecutor implements AgentExecutor {
       // claimQuestion 的三种出口：用户跳过（记 answered，不再打扰）/ 中止·收场（不记账）
       if (message.includes('skipped') && store !== undefined) {
         store.set(contextId, { answered: true, updatedAt: Date.now() })
-        console.log(`[dsh-a2a-server] 首选定被跳过，按缺省继续并记账（不再打扰）: context=${contextId}`)
+        console.log(`[dsh-hermes-link] 首选定被跳过，按缺省继续并记账（不再打扰）: context=${contextId}`)
       } else {
-        console.warn(`[dsh-a2a-server] 首选定未完成，回落缺省（不记账）: ${message}`)
+        console.warn(`[dsh-hermes-link] 首选定未完成，回落缺省（不记账）: ${message}`)
       }
       return effectiveRequestOptions(explicit, store?.get(contextId))
     }
@@ -848,7 +848,7 @@ class DshAgentExecutor implements AgentExecutor {
       ensureDir: async (path: string) => { await mkdir(path, { recursive: true }) },
     })
     console.log(
-      `[dsh-a2a-server] 工作区请求=${JSON.stringify(requestOptions.workspace)} ` +
+      `[dsh-hermes-link] 工作区请求=${JSON.stringify(requestOptions.workspace)} ` +
       `命中=${target.via} title=${JSON.stringify(target.title)} cwd=${target.cwd}`,
     )
     return target.cwd
@@ -881,7 +881,7 @@ class DshAgentExecutor implements AgentExecutor {
         requestOptions.sandbox,
       )
       console.log(
-        `[dsh-a2a-server] 沙箱档请求=${requestOptions.sandbox} 结果=${outcome} ` +
+        `[dsh-hermes-link] 沙箱档请求=${requestOptions.sandbox} 结果=${outcome} ` +
         `session=${String(sessionId)}`,
       )
       // 档位未落地必须让**调用方可见**（核验指出：此前只写服务端日志，回执却写着请求值，
@@ -925,7 +925,7 @@ class DshAgentExecutor implements AgentExecutor {
       ownedTaskByAgent.set(agentKey, questionSink)
     } else {
       console.warn(
-        `[dsh-a2a-server] 调用方未声明问答能力（metadata.${QNA_OPT_IN_KEY}=true），` +
+        `[dsh-hermes-link] 调用方未声明问答能力（metadata.${QNA_OPT_IN_KEY}=true），` +
         `本任务不认领提问: task=${questionSink.taskId}`,
       )
     }
@@ -1038,7 +1038,7 @@ class DshAgentExecutor implements AgentExecutor {
       try {
         // A1：消息 source 形状按**活会话的格式版本**选择（运行时信号，不依赖插件
         // 自己 node_modules 里可能滞后的 dsh 版本）：v4（dsh 0.2.0 起）用命名空间化
-        // `{ kind: 'plugin:dsh-a2a-server' }`，v3（0.1.x）用 `{ kind: 'plugin', plugin: … }`。
+        // `{ kind: 'plugin:dsh-hermes-link' }`，v3（0.1.x）用 `{ kind: 'plugin', plugin: … }`。
         // 旧形状在 0.2.0 上会让消息进不了 loop（任务静默不执行），故再加一层兜底：
         // 首选形状未驱动出 turn/start 时换另一种形状重试一次，仍无则响亮告警。
         const preferred = sourceModeForSessionVersion(sessionFormatVersion)
@@ -1063,12 +1063,12 @@ class DshAgentExecutor implements AgentExecutor {
         if (!(await deliver(preferred))) {
           const alternate: PluginMessageSourceMode = preferred === 'namespaced' ? 'legacy' : 'namespaced'
           console.warn(
-            `[dsh-a2a-server] no turn started within ${TURN_START_GRACE_MS}ms with the ${preferred} ` +
+            `[dsh-hermes-link] no turn started within ${TURN_START_GRACE_MS}ms with the ${preferred} ` +
               `message source shape (session format v${String(sessionVersion)}); retrying with ${alternate}`,
           )
           if (!(await deliver(alternate))) {
             console.warn(
-              '[dsh-a2a-server] no turn started with either message source shape — the task will ' +
+              '[dsh-hermes-link] no turn started with either message source shape — the task will ' +
                 'produce no assistant output; see CONFIGURATION dsh 0.1.5 / 0.2.0 compatibility',
             )
           }
@@ -1157,7 +1157,7 @@ class DshAgentExecutor implements AgentExecutor {
         // input-required 处正常收束流，客户端据此知道「任务在等输入」，不再是静默悬挂。
         // 首跳不受影响：总线因 INPUT_REQUIRED 保活，原提问仍在等真正的作答。
         console.warn(
-          `[dsh-a2a-server] 续投未带作答载荷但任务正等作答（${pendingQuestionCount(taskId)} 个未决）: ` +
+          `[dsh-hermes-link] 续投未带作答载荷但任务正等作答（${pendingQuestionCount(taskId)} 个未决）: ` +
           `task=${taskId}——以 INPUT_REQUIRED 收束本次流`,
         )
         eventBus.publish(
@@ -1175,9 +1175,9 @@ class DshAgentExecutor implements AgentExecutor {
         return
     }
     if (disposition === 'plain') {
-      console.warn(`[dsh-a2a-server] 续投报文不含 question-answer data part: task=${taskId}——按普通续投放行`)
+      console.warn(`[dsh-hermes-link] 续投报文不含 question-answer data part: task=${taskId}——按普通续投放行`)
     } else if (answer !== undefined && !resolveQuestion(taskId, answer)) {
-      console.warn(`[dsh-a2a-server] 续投作答未命中未决提问: task=${taskId} askId=${answer.askId ?? '(none)'}`)
+      console.warn(`[dsh-hermes-link] 续投作答未命中未决提问: task=${taskId} askId=${answer.askId ?? '(none)'}`)
     }
     const drain = taskDrains.get(taskId)
     if (drain !== undefined) await drain.promise
@@ -1202,7 +1202,7 @@ function buildAgentCard(host: string, port: number): AgentCard {
       organization: 'deepseek',
       url: 'https://github.com/deepseek-ai',
     },
-    version: '0.10.0',
+    version: '0.10.1',
     capabilities: {
       streaming: true,
       pushNotifications: false,
@@ -1264,7 +1264,7 @@ function applyResolvedConfig(resolved: A2ASettings): void {
   if (process.env.A2A_SERVER_TOKEN) runtimeConfig.authToken = process.env.A2A_SERVER_TOKEN
   // 每次配置被应用时打一行不含任何密钥的信息日志（authToken 只报有无）
   console.log(
-    `[dsh-a2a-server] settings applied: provider=${runtimeConfig.provider} model=${runtimeConfig.model}` +
+    `[dsh-hermes-link] settings applied: provider=${runtimeConfig.provider} model=${runtimeConfig.model}` +
     ` preset=${runtimeConfig.preset} cwd=${runtimeConfig.cwd || '(process.cwd())'}` +
     ` port=${runtimeConfig.port ?? '(auto)'} host=${runtimeConfig.host ?? '(default 127.0.0.1)'}` +
     ` contextMapPath=${runtimeConfig.contextMapPath ?? '(default)'}` +
@@ -1286,7 +1286,7 @@ async function reattachOrphanSessions(ctx: Context): Promise<{ attached: number;
   const byPath = new Map<string, WorkspaceView>()
   for (const ws of registry?.list?.() ?? []) byPath.set(ws.path, ws)
   if (byPath.size === 0) {
-    console.warn('[dsh-a2a-server] 存量捞回: workspaceRegistry 无可注册工作区，跳过')
+    console.warn('[dsh-hermes-link] 存量捞回: workspaceRegistry 无可注册工作区，跳过')
     return { attached: 0, failed: 0 }
   }
 
@@ -1313,10 +1313,10 @@ async function reattachOrphanSessions(ctx: Context): Promise<{ attached: number;
     try {
       await ws.attachSession(header.id)
       attached++
-      console.log(`[dsh-a2a-server] 存量捞回: session ${header.id} -> workspace ${ws.path}`)
+      console.log(`[dsh-hermes-link] 存量捞回: session ${header.id} -> workspace ${ws.path}`)
     } catch (e) {
       failed++
-      console.warn(`[dsh-a2a-server] 存量捞回失败 session ${header.id}:`, (e as Error)?.message ?? e)
+      console.warn(`[dsh-hermes-link] 存量捞回失败 session ${header.id}:`, (e as Error)?.message ?? e)
     }
   }
   return { attached, failed }
@@ -1375,7 +1375,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       return claimQuestion(owned, items, request?.signal)
         .then((answers) => ({ answers })) as unknown as Promise<unknown>
     }, { prepend: true }),
-    'dsh-a2a-server: user-questions answerer',
+    'dsh-hermes-link: user-questions answerer',
   )
 
   const server = http.createServer(async (req, res) => {
@@ -1436,7 +1436,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       res.writeHead(404, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Not found' }))
     } catch (e) {
-      console.error('[dsh-a2a-server] request error:', (e as Error)?.message ?? e)
+      console.error('[dsh-hermes-link] request error:', (e as Error)?.message ?? e)
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(
@@ -1451,7 +1451,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   })
 
   server.on('error', (e) => {
-    console.error('[dsh-a2a-server] HTTP server error:', (e as Error).message)
+    console.error('[dsh-hermes-link] HTTP server error:', (e as Error).message)
   })
 
   // listen 转 Promise：'error' 只作为本次 listen 的失败通道，成功后移除
@@ -1463,21 +1463,21 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       resolveListen()
     })
   })
-  console.log(`[dsh-a2a-server] A2A server listening on ${host}:${port}`)
+  console.log(`[dsh-hermes-link] A2A server listening on ${host}:${port}`)
 
   // 存量捞回：改为 ctx.inject 运行时依赖，等 workspaceRegistry / sessionPersistence 都就绪（ACTIVE）
   // 后再补挂，修复启动期 registry 尚未就绪时 ctx.get 返回 undefined 导致的静默 attached=0 竞态。
   // 不阻塞启动（apply 不 await），也不进入静态 inject 硬依赖（不推迟插件加载、不破坏 headless）。
   // 依赖重载会卸载并重跑本 callback；幂等性由 ws.sessionIds.includes(header.id) 跳过 + attachSession 幂等保证。
   ctx.inject(['workspaceRegistry', 'sessionPersistence'], () => {
-    console.log('[dsh-a2a-server] 存量捞回: workspaceRegistry 就绪，开始补挂')
+    console.log('[dsh-hermes-link] 存量捞回: workspaceRegistry 就绪，开始补挂')
     // callback 同步返回；异步捞回内部 fire-and-forget，全程兜底 try/catch 防 unhandled rejection
     void (async () => {
       try {
         const { attached, failed } = await reattachOrphanSessions(ctx)
-        console.log(`[dsh-a2a-server] 存量捞回: attached=${attached} failed=${failed}`)
+        console.log(`[dsh-hermes-link] 存量捞回: attached=${attached} failed=${failed}`)
       } catch (e) {
-        console.warn('[dsh-a2a-server] 存量捞回异常:', (e as Error)?.message ?? e)
+        console.warn('[dsh-hermes-link] 存量捞回异常:', (e as Error)?.message ?? e)
       }
     })()
   })
@@ -1488,9 +1488,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       server.close()
       contextMap.clear()
       // 落盘未完成的绑定写入（幂等；失败只记日志）
-      void bindingStore?.flush().catch((e: unknown) => { console.warn('[dsh-a2a-server] 绑定账本落盘失败:', e) })
+      void bindingStore?.flush().catch((e: unknown) => { console.warn('[dsh-hermes-link] 绑定账本落盘失败:', e) })
     }
-  }, 'dsh-a2a-server')
+  }, 'dsh-hermes-link')
 }
 
 /** 探测 8092/8093/8094 首个空闲端口；全占用则报错（fail loud） */
@@ -1498,5 +1498,5 @@ async function probePort(): Promise<number> {
   for (const p of [8092, 8093, 8094]) {
     if (await isPortFree(p)) return p
   }
-  throw new Error('[dsh-a2a-server] no free port among 8092/8093/8094')
+  throw new Error('[dsh-hermes-link] no free port among 8092/8093/8094')
 }

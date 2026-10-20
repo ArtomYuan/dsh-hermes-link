@@ -1,4 +1,4 @@
-# hermes-a2a-bridge
+# dsh-hermes-link
 
 **English** | [简体中文](README.md)
 
@@ -198,7 +198,7 @@ place.
   card, a websocket that is not up, a closed slot or an internal error all continue with
   "skipped" (the server closes that question as aborted), never leaving the task without an
   exit.
-- **Requires**: `dsh-a2a-server` ≥0.6.0 plus the Feishu adapter formal patch
+- **Requires**: `dsh-hermes-link` ≥0.6.0 plus the Feishu adapter formal patch
   (`hermes_ask_action` namespace + handler registry + `is_ws_ready()`, see
   `~/.hermes/docs/hermes/custom-patches.md`). Without the adapter patch the bridge warns
   loudly when a live stream starts, and the click branch acknowledges truthfully rather than
@@ -221,15 +221,15 @@ an invalid tier / empty workspace name is blocked up front while the finer works
 are enforced by the server (the task closes as FAILED and the reason is returned to this line). Details (including "writes are confined, reads are not") in
 [CONFIGURATION.en.md](CONFIGURATION.en.md) "Request-level options: workspace and sandbox tier".
 
-## Relationship with dsh-a2a-server
+## Relationship with dsh-hermes-link
 
-This plugin and [dsh-a2a-server](https://github.com/ArtomYuan/dsh-a2a-server) are not
+This plugin and [dsh-hermes-link](https://github.com/ArtomYuan/dsh-hermes-link) are not
 hard-bound; combine them as needed:
 
 | Combination | What you get |
 | --- | --- |
-| dsh-a2a-server only | A standard A2A interface callable by any A2A client |
-| This plugin only | Not applicable — it relies on dsh-a2a-server as its server |
+| dsh-hermes-link only | A standard A2A interface callable by any A2A client |
+| This plugin only | Not applicable — it relies on dsh-hermes-link as its server |
 | Both together | Full experience: task submission + live progress (dsh line-form process group + closing row) + session continuity (one conversation ↔ one dsh session) + single execution |
 
 ## Installation
@@ -238,7 +238,7 @@ hard-bound; combine them as needed:
 
    ```sh
    mkdir -p ~/.hermes/plugins
-   git clone https://github.com/ArtomYuan/hermes-a2a-bridge ~/.hermes/plugins/hermes-a2a-bridge
+   git clone https://github.com/ArtomYuan/dsh-hermes-link ~/.hermes/plugins/dsh-hermes-link
    ```
 
 2. Enable the plugin in `~/.hermes/config.yaml`:
@@ -246,10 +246,10 @@ hard-bound; combine them as needed:
    ```yaml
    plugins:
      enabled:
-       - hermes-a2a-bridge
+       - dsh-hermes-link
    ```
 
-3. Configure the dsh peer (pointing at dsh-a2a-server):
+3. Configure the dsh peer (pointing at dsh-hermes-link):
 
    ```yaml
    a2a_agents:
@@ -276,8 +276,8 @@ detailed / fully expanded) — can be toggled or selected directly from the "A2A
 live switches" panel at the top of the Hermes
 Dashboard "Plugins" page; saving takes effect **immediately (no gateway restart
 — hot read)**. The backend endpoints
-`GET/POST /api/plugins/hermes-a2a-bridge/collector` strictly validate and write
-back `plugins.entries.hermes-a2a-bridge.settings.collector.*` (preserving the
+`GET/POST /api/plugins/dsh-hermes-link/collector` strictly validate and write
+back `plugins.entries.dsh-hermes-link.settings.collector.*` (preserving the
 entry-level `allow_tool_override` and all other keys; POST tolerates the legacy
 `code_blocks` key as a deprecated alias of the legacy `content`). First deployment
 needs one dashboard-process restart for the panel to appear.

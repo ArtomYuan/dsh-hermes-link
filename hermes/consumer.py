@@ -1,6 +1,6 @@
-"""hermes-a2a-bridge — P2c 直播消费者（可独立运行、不经 gateway）.
+"""dsh-hermes-link — P2c 直播消费者（可独立运行、不经 gateway）.
 
-向 dsh-a2a-server 发 ``SendStreamingMessage``，逐行解析 SSE ``data:`` 事件，
+向 dsh-hermes-link 发 ``SendStreamingMessage``，逐行解析 SSE ``data:`` 事件，
 把 ``result.{task|statusUpdate|artifactUpdate}`` 归一化为统一事件序列，再按
 dsh 客户端「工作步骤展示」的行形态渲染（组头行 / 步骤行 / 思考行 / 收束行，
 无代码框），经节流（高信号逐条放行 / 低信号 text 聚合）与 redact 后发送到
@@ -9,7 +9,7 @@ dsh 客户端「工作步骤展示」的行形态渲染（组头行 / 步骤行 
 渲染基线（v0.7.0 起）：**直播过程与回复一律不再使用代码框 / 围栏**，改为逐行
 复刻 dsh 客户端的行结构与图标（见下文「dsh 行渲染」常量区的来源注释）。
 
-wire 格式（dsh-a2a-server, @a2a-js/sdk v1.1.0）
+wire 格式（dsh-hermes-link, @a2a-js/sdk v1.1.0）
 ------------------------------------------------
 - ``POST http://127.0.0.1:8092/``，JSON-RPC ``method: "SendStreamingMessage"``，
   请求头 ``A2A-Version: 1.0`` + ``Authorization: Bearer <token>``。
@@ -58,7 +58,7 @@ def _import_qna():
     try:
         from . import qna as _qna
     except (ImportError, ValueError) as exc:
-        logger.debug("hermes-a2a-bridge: relative qna import failed: %s", exc)
+        logger.debug("dsh-hermes-link: relative qna import failed: %s", exc)
         import importlib.util
         import os
 
@@ -98,7 +98,7 @@ LINK_PROTOCOL_VERSION = _P.PROTOCOL_VERSION
 _DEFAULT_TIMEOUT = 300
 
 # 配置门控常量：collector（直播消费者）默认关。register() 读
-# ``plugins.entries.hermes-a2a-bridge.settings.collector.enabled``，缺省即 False。
+# ``plugins.entries.dsh-hermes-link.settings.collector.enabled``，缺省即 False。
 DEFAULT_ENABLED = False
 
 # 触发 text 缓冲 flush 的终态（status 终态；turn_end 单独处理）。
@@ -108,7 +108,7 @@ _TERMINAL_STATES = frozenset(_P.TERMINAL_TASK_STATES)
 QNA_OPT_IN_KEY = _P.METADATA_USER_QUESTIONS
 
 # §2.1/§2.4 请求级选项键：同样走 message.metadata（缺省不带＝现状）。
-# 服务端（dsh-a2a-server src/request-options.ts）按同名字面量读取；两侧有用例锁一致。
+# 服务端（dsh-hermes-link src/request-options.ts）按同名字面量读取；两侧有用例锁一致。
 WORKSPACE_META_KEY = _P.METADATA_WORKSPACE
 SANDBOX_META_KEY = _P.METADATA_SANDBOX
 # dsh 三档沙箱枚举（本部署 permission-presets 表键与之同名）
@@ -306,7 +306,7 @@ def parse_sse_lines(lines: Iterable[Any]) -> Iterator[Dict[str, Any]]:
         try:
             obj = json.loads(payload)
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning("hermes-a2a-bridge: bad SSE data line: %s", exc)
+            logger.warning("dsh-hermes-link: bad SSE data line: %s", exc)
             continue
         if isinstance(obj, dict):
             yield obj
@@ -383,7 +383,7 @@ def _normalize_data_part(
         return {"type": "turn_end", "turn": turn, "reason": value.get("reason", "")}
     if kind == "text":
         return {"type": "text", "text": value.get("text", ""), "final": bool(last_chunk)}
-    logger.warning("hermes-a2a-bridge: unknown data-part kind: %r", kind)
+    logger.warning("dsh-hermes-link: unknown data-part kind: %r", kind)
     return None
 
 
@@ -450,7 +450,7 @@ def normalize_events(results: Iterable[Dict[str, Any]]) -> Iterator[Dict[str, An
             continue
 
         logger.warning(
-            "hermes-a2a-bridge: unrecognized result keys: %s", sorted(result.keys())
+            "dsh-hermes-link: unrecognized result keys: %s", sorted(result.keys())
         )
 
 
@@ -1027,7 +1027,7 @@ def _trim_card_to_budget(card: Dict[str, Any]) -> Dict[str, Any]:
     if not card or _card_bytes(card) <= _CARD_MAX_BYTES:
         return card
     logger.warning(
-        "hermes-a2a-bridge: 单个过程组超过 %d 字节卡片上限，已裁剪正文（verbose 超长结果）",
+        "dsh-hermes-link: 单个过程组超过 %d 字节卡片上限，已裁剪正文（verbose 超长结果）",
         _CARD_MAX_BYTES,
     )
     elements: list = []
@@ -1354,16 +1354,16 @@ def read_dsh_transcript_view(dsh_home: str, dsh_profile: str) -> str:
     try:
         import yaml
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: follow-dsh: PyYAML unavailable: %s", exc)
+        logger.warning("dsh-hermes-link: follow-dsh: PyYAML unavailable: %s", exc)
         return LIVE_DETAIL_FALLBACK
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: follow-dsh: cannot read %s: %s", path, exc)
+        logger.warning("dsh-hermes-link: follow-dsh: cannot read %s: %s", path, exc)
         return LIVE_DETAIL_FALLBACK
     if not isinstance(data, list):
-        logger.warning("hermes-a2a-bridge: follow-dsh: %s is not an entry array", path)
+        logger.warning("dsh-hermes-link: follow-dsh: %s is not an entry array", path)
         return LIVE_DETAIL_FALLBACK
     for entry in data:
         if not isinstance(entry, dict) or entry.get("id") != "ui-chat":
@@ -1379,7 +1379,7 @@ def read_dsh_transcript_view(dsh_home: str, dsh_profile: str) -> str:
             return "detailed"
         break
     logger.warning(
-        "hermes-a2a-bridge: follow-dsh: no valid ui-chat.transcriptView in %s", path
+        "dsh-hermes-link: follow-dsh: no valid ui-chat.transcriptView in %s", path
     )
     return LIVE_DETAIL_FALLBACK
 
@@ -1677,7 +1677,7 @@ def _redact(text: str) -> str:
 
         return redact_sensitive_text(text, force=True)
     except Exception as exc:  # 独立运行时无 hermes-agent，redact 不可用即跳过
-        logger.debug("hermes-a2a-bridge: redact unavailable, skipped: %s", exc)
+        logger.debug("dsh-hermes-link: redact unavailable, skipped: %s", exc)
         return text
 
 
@@ -1757,7 +1757,7 @@ def make_sender(ctx: Any = None) -> Callable[[str, str, str, str], Dict[str, Any
                         )
                         if fut is None:
                             logger.warning(
-                                "hermes-a2a-bridge: card schedule failed; 回落文本行"
+                                "dsh-hermes-link: card schedule failed; 回落文本行"
                             )
                         else:
                             result = fut.result(timeout=60)
@@ -1770,16 +1770,16 @@ def make_sender(ctx: Any = None) -> Callable[[str, str, str, str], Dict[str, Any
                                     "message_id": getattr(result, "message_id", None),
                                 }
                             logger.warning(
-                                "hermes-a2a-bridge: card send failed (%s); 回落文本行",
+                                "dsh-hermes-link: card send failed (%s); 回落文本行",
                                 getattr(result, "error", "") or "unknown",
                             )
                     else:
                         logger.warning(
-                            "hermes-a2a-bridge: adapter 无 send_card；回落文本行"
+                            "dsh-hermes-link: adapter 无 send_card；回落文本行"
                         )
                 except Exception as exc:  # 卡片异常不阻断文本回退
                     logger.warning(
-                        "hermes-a2a-bridge: card send raised (%s); 回落文本行", exc
+                        "dsh-hermes-link: card send raised (%s); 回落文本行", exc
                     )
 
             last: Dict[str, Any] = {"ok": True, "via": "adapter", "target": target,
@@ -1801,7 +1801,7 @@ def make_sender(ctx: Any = None) -> Callable[[str, str, str, str], Dict[str, Any
                             "text": chunk, "target": target, "message_id": None}
             return last
         except Exception as exc:
-            logger.warning("hermes-a2a-bridge: adapter send failed: %s", exc)
+            logger.warning("dsh-hermes-link: adapter send failed: %s", exc)
             return {"ok": False, "error": "send_failed", "text": redacted,
                     "target": target, "message_id": None}
 
@@ -1878,7 +1878,7 @@ def _wait_ws_ready(
         try:
             ready = probe(platform)
         except Exception as exc:  # 探针异常按「判不出来」处理
-            logger.warning("hermes-a2a-bridge: WS 就绪探针异常（放行）: %s", exc)
+            logger.warning("dsh-hermes-link: WS 就绪探针异常（放行）: %s", exc)
             return True
         if ready is not False:
             return True
@@ -1913,7 +1913,7 @@ def _handle_question_event(
     questions = payload.get("questions") if isinstance(payload.get("questions"), list) else []
     if not ask_id or not task_id or not questions:
         logger.warning(
-            "hermes-a2a-bridge: question 事件载荷不完整，无法建卡（ask=%r task=%r 题数=%d）",
+            "dsh-hermes-link: question 事件载荷不完整，无法建卡（ask=%r task=%r 题数=%d）",
             ask_id, task_id, len(questions),
         )
         return None
@@ -1952,7 +1952,7 @@ def _handle_question_event(
             # 卡虽发出但点击归途不通（附录 A 实证坑）。超时即按跳过收口。
             if not _wait_ws_ready(sender, platform):
                 logger.warning(
-                    "hermes-a2a-bridge: 平台长连接未就位，提问卡未发（按跳过收口）platform=%s", platform,
+                    "dsh-hermes-link: 平台长连接未就位，提问卡未发（按跳过收口）platform=%s", platform,
                 )
                 skipped = True
                 break
@@ -1961,13 +1961,13 @@ def _handle_question_event(
             # 没有可点的卡就没有作答归途，此时等待毫无意义。
             if not (isinstance(res, dict) and res.get("ok") and res.get("via") == "adapter-card"):
                 logger.warning(
-                    "hermes-a2a-bridge: 提问卡未真正送达（%r），本次提问按跳过收口", res,
+                    "dsh-hermes-link: 提问卡未真正送达（%r），本次提问按跳过收口", res,
                 )
                 skipped = True
                 break
             answer = slot.wait_for(qid)  # 零超时：只认「作答 / 跳过 / 槽位收场」
             if answer is None:
-                logger.warning("hermes-a2a-bridge: 提问槽位被收场，本次提问按跳过收口 ask=%s", ask_id)
+                logger.warning("dsh-hermes-link: 提问槽位被收场，本次提问按跳过收口 ask=%s", ask_id)
                 skipped = True
                 break
             if "skipped" in answer:
@@ -1978,7 +1978,7 @@ def _handle_question_event(
                 item["custom"] = answer["custom"]
             answers.append(item)
     except Exception as exc:  # 任何异常都不许把任务留在悬挂里
-        logger.warning("hermes-a2a-bridge: 提问处理异常，按跳过收口: %s", exc)
+        logger.warning("dsh-hermes-link: 提问处理异常，按跳过收口: %s", exc)
         skipped = True
     finally:
         qna.discard_ask(ask_id)
@@ -1987,7 +1987,7 @@ def _handle_question_event(
         task_id=task_id, context_id=context_id, ask_id=ask_id, answers=answers, skipped=skipped,
     )
     logger.info(
-        "hermes-a2a-bridge: 提问续投 task=%s ask=%s skipped=%s 答数=%d",
+        "dsh-hermes-link: 提问续投 task=%s ask=%s skipped=%s 答数=%d",
         task_id, ask_id, skipped, len(answers),
     )
     return _open_continuation(url, body, headers, timeout, ask_id=ask_id)
@@ -2014,7 +2014,7 @@ def _open_continuation(
         except Exception as exc:
             last_error = exc
             logger.warning(
-                "hermes-a2a-bridge: 续投流建立失败（第 %d/%d 次）ask=%s: %s",
+                "dsh-hermes-link: 续投流建立失败（第 %d/%d 次）ask=%s: %s",
                 attempt, _CONTINUATION_ATTEMPTS, ask_id, exc,
             )
             if attempt < _CONTINUATION_ATTEMPTS:
@@ -2024,7 +2024,7 @@ def _open_continuation(
             return iter(())
         return itertools.chain([first], stream)
     logger.warning(
-        "hermes-a2a-bridge: 续投流 %d 次都未建立，本次作答没能送达服务端"
+        "dsh-hermes-link: 续投流 %d 次都未建立，本次作答没能送达服务端"
         "（dsh 侧提问仍挂起，需中止该 turn 收口）ask=%s last_error=%s",
         _CONTINUATION_ATTEMPTS, ask_id, last_error,
     )
@@ -2038,9 +2038,9 @@ def _send_aux_line(
     try:
         res = sender(platform, chat_id, thread_id, text)
         if not (isinstance(res, dict) and res.get("ok")):
-            logger.warning("hermes-a2a-bridge: 提问状态行未送达: %r", res)
+            logger.warning("dsh-hermes-link: 提问状态行未送达: %r", res)
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: 提问状态行发送异常: %s", exc)
+        logger.warning("dsh-hermes-link: 提问状态行发送异常: %s", exc)
 
 
 def _streaming_message_body(
@@ -2193,7 +2193,7 @@ def consume_stream(
                         res = sender(platform, chat_id, thread_id, item, card=item_card)
                     if isinstance(res, dict) and not res.get("ok"):
                         logger.warning(
-                            "hermes-a2a-bridge: send not delivered: %s", res.get("error")
+                            "dsh-hermes-link: send not delivered: %s", res.get("error")
                         )
                     else:
                         stats["messages_sent"] += 1
@@ -2201,8 +2201,8 @@ def consume_stream(
                         stats["message_ids"].append(res["message_id"])
             except Exception as exc:  # 单事件失败不影响整体
                 logger.warning(
-                    "hermes-a2a-bridge: event %r failed: %s", event, exc
+                    "dsh-hermes-link: event %r failed: %s", event, exc
                 )
     except Exception as exc:  # 打开 / 迭代流失败（网络等）
-        logger.warning("hermes-a2a-bridge: stream aborted: %s", exc)
+        logger.warning("dsh-hermes-link: stream aborted: %s", exc)
     return stats

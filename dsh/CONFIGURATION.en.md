@@ -1,4 +1,4 @@
-# dsh-a2a-server Configuration & Mechanics
+# dsh-hermes-link Configuration & Mechanics
 
 > Status: **P2a streaming intermediate events + context map cleanup**. The A2A
 > server business logic is in place (node:http + Bearer auth +
@@ -17,17 +17,17 @@ dsh workspace), distributed as a standalone bundle. Choose one of three methods.
 ### Method A: npm (recommended)
 
 ```sh
-dsh plugin --profile <name> add @artomyuan/dsh-a2a-server
+dsh plugin --profile <name> add @artomyuan/dsh-hermes-link
 ```
 
 The official default channel (`dsh plugin add` without a prefix installs from the
 npm registry); published to npm with a prebuilt `lib/`, so no build authorization
-is required. Pin a version when needed: `@artomyuan/dsh-a2a-server@0.3.0`.
+is required. Pin a version when needed: `@artomyuan/dsh-hermes-link@0.3.0`.
 
 ### Method B: GitHub install (for unreleased changes)
 
 ```sh
-dsh plugin --profile <name> add github:ArtomYuan/dsh-a2a-server#<commit>
+dsh plugin --profile <name> add github:ArtomYuan/dsh-hermes-link#<commit>
 ```
 
 - **The commit must be pinned** (`#<sha>`): git installs pull source code rather
@@ -39,7 +39,7 @@ dsh plugin --profile <name> add github:ArtomYuan/dsh-a2a-server#<commit>
 
   ```yaml
   allowBuilds:
-    @artomyuan/dsh-a2a-server: true
+    @artomyuan/dsh-hermes-link: true
   ```
 
   Then rerun `add`. This authorization equals **allowing this package's code to
@@ -49,14 +49,14 @@ dsh plugin --profile <name> add github:ArtomYuan/dsh-a2a-server#<commit>
 ### Method C: tarball
 
 ```sh
-pnpm pack                 # produces artomyuan-dsh-a2a-server-<version>.tgz
-dsh plugin --profile <name> add ./artomyuan-dsh-a2a-server-<version>.tgz
+pnpm pack                 # produces artomyuan-dsh-hermes-link-<version>.tgz
+dsh plugin --profile <name> add ./artomyuan-dsh-hermes-link-<version>.tgz
 ```
 
 ### Uninstall
 
 ```sh
-dsh plugin --profile <name> remove @artomyuan/dsh-a2a-server
+dsh plugin --profile <name> remove @artomyuan/dsh-hermes-link
 ```
 
 ## Package structure (bundle)
@@ -344,8 +344,8 @@ quo rather than silently change behavior).
 plugin messages as `kind: 'plugin:<name>'`. `pluginMessageSource()` returns,
 per the detection above:
 
-- 0.2.x: `{ kind: 'plugin:dsh-a2a-server' }`
-- 0.1.x or detection failure: `{ kind: 'plugin', plugin: 'dsh-a2a-server' }`
+- 0.2.x: `{ kind: 'plugin:dsh-hermes-link' }`
+- 0.1.x or detection failure: `{ kind: 'plugin', plugin: 'dsh-hermes-link' }`
 
 Sending the legacy shape on 0.2.0 makes the message **never enter the agent
 loop — the task silently does not execute** (looks COMPLETED but yields
@@ -512,7 +512,7 @@ dsh 0.2.0-rc.2`. Since 0.3.0 the peer range is widened (`… || ^0.2.0-rc.2`), s
 old version (≤0.2.1) on 0.2.0 do:
 
 ```sh
-dsh plugin --profile <p> allow-version @artomyuan/dsh-a2a-server@<old-version> --dsh-version 0.2.0-rc.2 --accept-risk
+dsh plugin --profile <p> allow-version @artomyuan/dsh-hermes-link@<old-version> --dsh-version 0.2.0-rc.2 --accept-risk
 ```
 
 ### Session resume diagnostics (A9)
@@ -540,7 +540,7 @@ stating `falling back to a NEW session (contextId mapping dropped)`.
 
 ## Naming
 
-- Package name: `@artomyuan/dsh-a2a-server` (the `name` referenced by the bundle patch for
+- Package name: `@artomyuan/dsh-hermes-link` (the `name` referenced by the bundle patch for
   Node resolution).
 - Patch line logical id: `a2a-server`.
 - Plugin role: `Executor` (corresponds to the A2A `AgentExecutor` mapping, which

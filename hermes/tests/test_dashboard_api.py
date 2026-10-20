@@ -40,12 +40,12 @@ _PREEXISTING = {
     )
 }
 
-_PLUGIN_ID = "hermes-a2a-bridge"
+_PLUGIN_ID = "dsh-hermes-link"
 _SWITCH_KEYS = ("enabled", "events", "live_detail")
 _DEFAULTS = {"enabled": False, "events": True, "live_detail": "follow-dsh"}
 # 不存在的 dsh_home（follow-dsh 解析时确定性回落 detailed，避免依赖真实 dsh 文件）。
 _DSH_HOME_NONEXISTENT = os.path.join(
-    tempfile.gettempdir(), "hermes-a2a-bridge-nonexistent-dsh"
+    tempfile.gettempdir(), "dsh-hermes-link-nonexistent-dsh"
 )
 
 # 真实 consumer（仅复用 resolve_collector_level 的确定性解析逻辑；测试用 spec 加载）。
@@ -151,7 +151,7 @@ def _install_fake_modules():
     config.load_config_readonly = load_config_readonly
     config.read_user_config_raw = read_user_config_raw
     config.save_config = save_config
-    config.get_config_path = lambda: Path("/tmp/hermes-a2a-bridge-test/config.yaml")
+    config.get_config_path = lambda: Path("/tmp/dsh-hermes-link-test/config.yaml")
     config.is_managed = lambda: config.managed
 
     web_server = types.ModuleType("hermes_cli.web_server")
@@ -201,7 +201,7 @@ def _deep_merge(target, patch):
 
 
 def _entry_config(settings=None, legacy=None, extra=None):
-    """构造 plugins.entries.hermes-a2a-bridge 条目配置。"""
+    """构造 plugins.entries.dsh-hermes-link 条目配置。"""
     entry = {}
     if extra:
         entry.update(copy.deepcopy(extra))

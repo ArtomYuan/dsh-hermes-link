@@ -1,4 +1,4 @@
-"""hermes-a2a-bridge「直播静默」修复（v0.5.1）hook 级单元测试（纯 stdlib unittest）.
+"""dsh-hermes-link「直播静默」修复（v0.5.1）hook 级单元测试（纯 stdlib unittest）.
 
 运行方式
 --------
@@ -27,7 +27,7 @@ import unittest
 _WORKTREE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MODULE_PATH = os.path.join(_WORKTREE, "__init__.py")
 
-# 目录名带连字符（hermes-a2a-bridge）不能直接 import，用 spec 加载。
+# 目录名带连字符（dsh-hermes-link）不能直接 import，用 spec 加载。
 _spec = importlib.util.spec_from_file_location("hermes_a2a_bridge", _MODULE_PATH)
 _MODULE = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_MODULE)

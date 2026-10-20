@@ -1,4 +1,4 @@
-# dsh-a2a-server
+# dsh-hermes-link
 
 **English** | [简体中文](README.md)
 
@@ -10,7 +10,7 @@ A server plugin library that exposes dsh agent sessions through the A2A
 
 The following effects are driven by this library's A2A server and streaming
 events; client-side rendering is done by
-[hermes-a2a-bridge](https://github.com/ArtomYuan/hermes-a2a-bridge) (code-block
+[dsh-hermes-link](https://github.com/ArtomYuan/dsh-hermes-link) (code-block
 rendering of tool commands / execution results / final text, and progress pushed
 to Feishu / QQ).
 
@@ -174,18 +174,18 @@ today's behaviour, byte-for-byte unchanged):
   calls is §2.2 (first-use selection / binding, not implemented this round); until then callers
   should pass `workspace` on every call.
 
-## Relationship with hermes-a2a-bridge
+## Relationship with dsh-hermes-link
 
 This library exposes a standard A2A interface and does not depend on any specific
 client — other A2A clients can call it directly. Hermes users who want the full
 experience (live progress / session continuity / single execution) can pair it with
-[hermes-a2a-bridge](https://github.com/ArtomYuan/hermes-a2a-bridge). The two libraries
+[dsh-hermes-link](https://github.com/ArtomYuan/dsh-hermes-link). The two libraries
 are not hard-bound; combine them as needed:
 
 | Combination | What you get |
 | --- | --- |
 | This library only | A standard A2A interface callable by any A2A client |
-| With hermes-a2a-bridge | Full experience: task submission + live progress + session continuity + single execution |
+| With dsh-hermes-link | Full experience: task submission + live progress + session continuity + single execution |
 
 ## Versions & Support
 
@@ -212,15 +212,15 @@ workspace), distributed as a standalone bundle.
    - **From npm (recommended)**:
 
      ```sh
-     dsh plugin --profile <name> add @artomyuan/dsh-a2a-server
+     dsh plugin --profile <name> add @artomyuan/dsh-hermes-link
      ```
 
-     Pin a version when needed: `dsh plugin --profile <name> add @artomyuan/dsh-a2a-server@0.5.1`.
+     Pin a version when needed: `dsh plugin --profile <name> add @artomyuan/dsh-hermes-link@0.5.1`.
 
    - **From the GitHub source** (to try unreleased changes; **the commit must be pinned**):
 
      ```sh
-     dsh plugin --profile <name> add github:ArtomYuan/dsh-a2a-server#<commit>
+     dsh plugin --profile <name> add github:ArtomYuan/dsh-hermes-link#<commit>
      ```
 
      The first `add` fails because pnpm >=10 refuses to run a git dependency's
@@ -229,7 +229,7 @@ workspace), distributed as a standalone bundle.
 
      ```yaml
      allowBuilds:
-       @artomyuan/dsh-a2a-server: true
+       @artomyuan/dsh-hermes-link: true
      ```
 
 2. Fill the minimal A2A server plugin config (`port` / `authToken` / `preset`) in

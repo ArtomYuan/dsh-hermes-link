@@ -1,11 +1,11 @@
-"""hermes-a2a-bridge dashboard 后端 — 挂载于 /api/plugins/hermes-a2a-bridge/。
+"""dsh-hermes-link dashboard 后端 — 挂载于 /api/plugins/dsh-hermes-link/。
 
 端点
 ----
 - ``GET  /collector``：开关当前值 + 默认值元数据。**绝不返回任何密钥**
   （只返回 enabled / events / live_detail 三个键；live_detail 附实际生效档位 effective）。
 - ``POST /collector``：严格校验（布尔值 + live_detail 字符串枚举、拒绝多余键与非法值），
-  原子写回 ``plugins.entries.hermes-a2a-bridge.settings.collector.<key>``；
+  原子写回 ``plugins.entries.dsh-hermes-link.settings.collector.<key>``；
   ``merge_existing=True`` 保证条目顶层 ``allow_tool_override`` 与文件中其它所有键
   都被保留。失败 fail loud（4xx/5xx + 明确 detail），不静默吞。
 
@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
-PLUGIN_ID = "hermes-a2a-bridge"
+PLUGIN_ID = "dsh-hermes-link"
 _SWITCH_KEYS = ("enabled", "events", "live_detail")
 _SWITCH_DEFAULTS: Dict[str, Any] = {
     "enabled": False,
@@ -271,7 +271,7 @@ def get_collector() -> Dict[str, Dict[str, Any]]:
     try:
         values = _read_collector_values()
     except Exception as exc:
-        log.exception("hermes-a2a-bridge: GET /collector failed")
+        log.exception("dsh-hermes-link: GET /collector failed")
         raise HTTPException(
             status_code=500, detail=f"failed to read collector settings: {exc}"
         )
@@ -295,7 +295,7 @@ def post_collector(body: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except Exception as exc:
-        log.exception("hermes-a2a-bridge: POST /collector failed")
+        log.exception("dsh-hermes-link: POST /collector failed")
         raise HTTPException(
             status_code=500, detail=f"failed to write collector settings: {exc}"
         )

@@ -6,8 +6,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE_DIR="${DSH_PROFILE_DIR:-$HOME/.dsh/profiles/web}"
-SERVER_PKG_DIR="$PROFILE_DIR/node_modules/@artomyuan/dsh-a2a-server"
-BRIDGE_DIR="${HERMES_BRIDGE_DIR:-$HOME/.hermes/plugins/hermes-a2a-bridge}"
+SERVER_PKG_DIR="$PROFILE_DIR/node_modules/@artomyuan/dsh-hermes-link"
+BRIDGE_DIR="${HERMES_BRIDGE_DIR:-$HOME/.hermes/plugins/dsh-hermes-link}"
 SERVICE_PATCH="${DSH_SERVICE_PATCH:-$HOME/.dsh/dsh-service.patch.yml}"
 PROFILE_PATCH="$PROFILE_DIR/cordis.patch.yml"
 GATEWAY_LOG="${HERMES_GATEWAY_LOG:-$HOME/.hermes/logs/gateway.log}"

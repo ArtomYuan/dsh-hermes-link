@@ -1,4 +1,4 @@
-# hermes-a2a-bridge Configuration & Mechanics
+# dsh-hermes-link Configuration & Mechanics
 
 > Status: **P2c-fix — pre_tool_call hook single execution (async), double
 > execution eliminated**. The P2b origin→contextId injection is retained; the P2c
@@ -84,12 +84,12 @@ Enable it (choose one):
 
 ```bash
 # Method A: CLI command (recommended)
-hermes plugins enable hermes-a2a-bridge
+hermes plugins enable dsh-hermes-link
 
 # Method B: directly edit ~/.hermes/config.yaml, add an entry to the plugins.enabled list:
 #   plugins:
 #     enabled:
-#       - hermes-a2a-bridge
+#       - dsh-hermes-link
 ```
 
 After enabling, **the gateway must be restarted to load it** (plugin discovery is
@@ -106,7 +106,7 @@ systemctl --user restart hermes-gateway
 
 ```sh
 mkdir -p ~/.hermes/plugins
-git clone https://github.com/ArtomYuan/hermes-a2a-bridge ~/.hermes/plugins/hermes-a2a-bridge
+git clone https://github.com/ArtomYuan/dsh-hermes-link ~/.hermes/plugins/dsh-hermes-link
 ```
 
 ### Method B: pip structure (later)
@@ -116,7 +116,7 @@ install instructions.
 
 > **Note**: The above covers plugin files only. **Restarting the Hermes gateway depends on how your Hermes is deployed** (user/system systemd service, foreground process, Docker container, …) — every `systemctl --user restart hermes-gateway` in this document is a *user-level systemd* **example**; restart per your actual deployment.
 
-## Working with dsh-a2a-server
+## Working with dsh-hermes-link
 
 This plugin is responsible for injecting `context_id` on the Hermes side (and,
 optionally, performing a streaming single execution against the dsh target, see
@@ -126,7 +126,7 @@ the dsh side and point Hermes's A2A client at it.
 
 ### Hermes-side a2a_agents configuration
 
-Hermes acts as an A2A client and configures dsh-a2a-server as a peer in
+Hermes acts as an A2A client and configures dsh-hermes-link as a peer in
 `~/.hermes/config.yaml`:
 
 ```yaml
@@ -140,10 +140,10 @@ a2a_agents:
     capabilities: [coding, terminal, research, web_search]
 ```
 
-### dsh-side dsh-a2a-server configuration
+### dsh-side dsh-hermes-link configuration
 
-On the dsh side, the A2A server is exposed by the `dsh-a2a-server` library
-(`ArtomYuan/dsh-a2a-server`). Its `Config` (cordis.yml plugin `config`) fields:
+On the dsh side, the A2A server is exposed by the `dsh-hermes-link` library
+(`ArtomYuan/dsh-hermes-link`). Its `Config` (cordis.yml plugin `config`) fields:
 `port` (defaults to probing 8092/8093/8094 for the first free port), `host`
 (default `127.0.0.1`), `authToken` (Bearer, also readable from the environment
 variable `A2A_SERVER_TOKEN`), `provider` / `model` / `preset` / `cwd` /
@@ -159,7 +159,7 @@ variable `A2A_SERVER_TOKEN`), `provider` / `model` / `preset` / `cwd` /
    nothing is overwritten — that value is adopted as-is); the framework
    shallow-merges it into `message.contextId` (A2A protocol
    `text_message(..., context_id=ctx)`).
-3. dsh-a2a-server receives `message.contextId` and uses it as the session-reuse
+3. dsh-hermes-link receives `message.contextId` and uses it as the session-reuse
    key: repeated deliveries from the same Hermes conversation → reuse the same
    dsh session (continuous context); different conversations → different
    contextId → isolation.
@@ -214,7 +214,7 @@ the `pre_tool_call` hook:
 ### Request-level options: workspace and sandbox tier (§2.1/§2.4, since v0.9.0)
 
 `a2a_call` accepts two **optional** arguments that travel in the initial message's
-`message.metadata` to the server (`dsh-a2a-server` ≥0.7.0). **Without them nothing changes** —
+`message.metadata` to the server (`dsh-hermes-link` ≥0.7.0). **Without them nothing changes** —
 delivery to the generic workspace is byte-for-byte the same as before.
 
 | Argument | Value | Server behaviour |
@@ -236,7 +236,7 @@ Notes:
   reporting "no text output").
 - **Tool schema status (honest)**: the `a2a_call` parameter schema belongs to Hermes' built-in
   `platforms/a2a` plugin (`agent`/`message`/`context_id` only) and is **outside this plugin's and
-  dsh-a2a-server's change scope**. The two arguments therefore do not appear in the tool's
+  dsh-hermes-link's change scope**. The two arguments therefore do not appear in the tool's
   reference description — callers (models) must pass them **explicitly** (instructed by the line
   or a prompt, or a later schema addition in the built-in plugin). Passthrough works (the schema
   does not forbid extra properties), but "the model will naturally think of passing them" is not
@@ -321,7 +321,7 @@ the bridge receives the `question` events the server emits; with `enabled=false`
 Q&A path stays dormant and behaviour matches the previous release. Only two **runtime
 prerequisites** (not configuration) are new: (1) the Feishu adapter formal patch (providing
 `register_ask_action_handler` and `is_ws_ready()`, see `docs/hermes/custom-patches.md`);
-(2) `dsh-a2a-server` ≥0.6.0 (it claims questions and supports the `taskId` continuation).
+(2) `dsh-hermes-link` ≥0.6.0 (it claims questions and supports the `taskId` continuation).
 Either one missing logs loudly when a live stream starts — never a silent failure.
 
 ### Troubleshooting: why does a conversation show no live messages? (v0.5.1)
@@ -395,7 +395,7 @@ switches" below), or by editing `~/.hermes/config.yaml`:
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           enabled: true           # live-send gate
@@ -412,7 +412,7 @@ double execution); non-dsh targets are unaffected.
 
 ### Live-detail tier (collector.live_detail)
 
-Full key path: `plugins.entries.hermes-a2a-bridge.settings.collector.live_detail`.
+Full key path: `plugins.entries.dsh-hermes-link.settings.collector.live_detail`.
 
 This key controls the **granularity of live progress**. Its four tiers map **one-to-one**
 onto dsh's "Work details" — the `config.transcriptView` of the `- id: ui-chat` entry in
@@ -431,7 +431,7 @@ current tier):
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           enabled: true
@@ -799,7 +799,7 @@ default).
 
 ### Event-stream toggle (collector.events)
 
-Full key path: `plugins.entries.hermes-a2a-bridge.settings.collector.events`.
+Full key path: `plugins.entries.dsh-hermes-link.settings.collector.events`.
 
 Whether "intermediate events" are pushed is controlled separately by this key
 (default `true`). It is orthogonal to `collector.live_detail`: `live_detail` controls
@@ -817,7 +817,7 @@ rows rendered per the tier) — the 📬 delivery is unaffected.
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           enabled: true
@@ -835,7 +835,7 @@ When unset it stays `true`, keeping existing deployments' behavior unchanged.
 
 ### Card streaming (collector.card, since v0.7.2; all content as of v0.7.3)
 
-Full key path: `plugins.entries.hermes-a2a-bridge.settings.collector.card`.
+Full key path: `plugins.entries.dsh-hermes-link.settings.collector.card`.
 
 | Value | Meaning |
 | --- | --- |
@@ -846,7 +846,7 @@ Full key path: `plugins.entries.hermes-a2a-bridge.settings.collector.card`.
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           card: panel      # off (default) / panel
@@ -910,15 +910,15 @@ caches by file mtime signature and picks up config.yaml changes automatically).
 
 Backend endpoints (mounted in the dashboard process, decoupled from the gateway):
 
-- `GET /api/plugins/hermes-a2a-bridge/collector` — current values + default
+- `GET /api/plugins/dsh-hermes-link/collector` — current values + default
   metadata for the three switches (`enabled` / `events` / `live_detail`), plus the
   **effective tier** for `live_detail` (the resolved value when it is
   `follow-dsh`); **never returns any secrets**, and never returns the deprecated
   `code_blocks` key.
-- `POST /api/plugins/hermes-a2a-bridge/collector` — strict validation (`enabled` /
+- `POST /api/plugins/dsh-hermes-link/collector` — strict validation (`enabled` /
   `events` accept booleans only; `live_detail` accepts only the 5 string enum
   values; illegal values and unknown keys are rejected), then atomically writes back
-  `plugins.entries.hermes-a2a-bridge.settings.collector.*`; the write preserves
+  `plugins.entries.dsh-hermes-link.settings.collector.*`; the write preserves
   the entry-level `allow_tool_override` and every other key in the file. Failures
   return 4xx/5xx with a concrete detail — never silently swallowed. During the
   upgrade window, a `code_blocks` key POSTed by an already-open old panel is
@@ -999,7 +999,7 @@ a2a_call (pre_tool_call hook)
 1. Load confirmation: `~/.hermes/logs/agent.log` shows the plugin discovery
    summary, with no `collector.enabled` read error.
 2. Config confirmation: `collector.enabled: true` is written into
-   `plugins.entries.hermes-a2a-bridge.settings`.
+   `plugins.entries.dsh-hermes-link.settings`.
 3. Behavior confirmation: in a Feishu / QQ conversation, have the agent call
    `a2a_call(agent="dsh", ...)` and observe ① the agent receives the "accepted"
    receipt within seconds (no more long blocking); ② the conversation receives
@@ -1009,7 +1009,7 @@ a2a_call (pre_tool_call hook)
    to 160, `detailed` plus the result body, `verbose` no header and untruncated),
    then the closing row `▸ 已完成` (or `▸ 已完成，用时 <n>秒`)
    (by default `follow-dsh` follows dsh's current tier), and that
-   **dsh executes only once** (the dsh-a2a-server log shows only one task
+   **dsh executes only once** (the dsh-hermes-link log shows only one task
    submission); ③ when the task finishes, the conversation receives the "📬 dsh
    任务完成，结果如下" result message (header + blank line + **full result body**,
    plain markdown, untruncated). Also (v0.5.1): have an `a2a_call` carrying an
@@ -1025,7 +1025,7 @@ a2a_call (pre_tool_call hook)
    dropdown with its 5 options and the effective-tier echo when it is
    `follow-dsh`) matching the current
    config.yaml values; after toggling, `GET /collector` and
-   `plugins.entries.hermes-a2a-bridge.settings.collector.*` in
+   `plugins.entries.dsh-hermes-link.settings.collector.*` in
    `~/.hermes/config.yaml` change in step (the entry-level `allow_tool_override`
    and all other keys survive). First deployment needs one dashboard-process
    restart (backend mounting and plugin discovery are one-shot).
@@ -1068,7 +1068,7 @@ python3 tests/test_silence_fix.py
 a fake `gateway.session_context` via `sys.modules`). `test_consumer.py` drives
 `parse_sse_lines` + `normalize_events` + `render_line` + `Throttler` +
 `render_process_group` + `render_turn_close` + `make_sender` with synthetic SSE
-`data:` strings matching dsh-a2a-server's real format (a mock sender records the send
+`data:` strings matching dsh-hermes-link's real format (a mock sender records the send
 list), covering normalized event kinds and order, narrative text as raw markdown (no
 `📖` prefix), text aggregation flushing only at terminal state, redact
 invocation, two-level sender fallback (no gateway → `no_gateway`), no crash on
@@ -1142,7 +1142,7 @@ end-to-end verification under the real gateway is deferred to the window period
   summary.
 - Behavior confirmation: in a messaging conversation, have the agent call
   `a2a_call` / `a2a_orchestrate` and observe whether the `message.contextId`
-  received by dsh-a2a-server is `{platform}/{chat_id}[/{thread_id}]`.
+  received by dsh-hermes-link is `{platform}/{chat_id}[/{thread_id}]`.
 
 ## Boundaries and notes
 

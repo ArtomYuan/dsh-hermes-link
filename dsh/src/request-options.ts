@@ -28,7 +28,7 @@
  * 本模块只做**纯逻辑 + 依赖注入**（注册表、落盘、权限服务都经接口传入），故可纯单测；
  * 与 dsh 运行时零耦合。
  *
- * @module dsh-a2a-server/request-options
+ * @module dsh-hermes-link/request-options
  */
 
 import { basename, isAbsolute, join, normalize, sep } from 'node:path'
@@ -291,7 +291,7 @@ export function applySandboxTier(
   const presets = deps.presets
   if (presets === undefined) {
     deps.warn(
-      `[dsh-a2a-server] 宿主未挂 permissionPresets（permission-presets 插件缺失），` +
+      `[dsh-hermes-link] 宿主未挂 permissionPresets（permission-presets 插件缺失），` +
       `本次不改沙箱档（请求档=${tier}，保持现状）`,
     )
     return 'unavailable'
@@ -301,7 +301,7 @@ export function applySandboxTier(
       presets.resolve(tier)
     } catch (e) {
       deps.warn(
-        `[dsh-a2a-server] 本部署的权限预设表里没有 ${JSON.stringify(tier)}（${(e as Error)?.message ?? e}）——` +
+        `[dsh-hermes-link] 本部署的权限预设表里没有 ${JSON.stringify(tier)}（${(e as Error)?.message ?? e}）——` +
         `本次不改沙箱档，保持现状`,
       )
       return 'unavailable'
@@ -318,7 +318,7 @@ export function applySandboxTier(
     presets.set(session, tier)
     return 'applied'
   } catch (e) {
-    deps.warn(`[dsh-a2a-server] 落沙箱档失败（${tier}）: ${(e as Error)?.message ?? e}`)
+    deps.warn(`[dsh-hermes-link] 落沙箱档失败（${tier}）: ${(e as Error)?.message ?? e}`)
     return 'unavailable'
   }
 }

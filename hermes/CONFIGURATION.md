@@ -1,4 +1,4 @@
-# hermes-a2a-bridge 配置与机制说明
+# dsh-hermes-link 配置与机制说明
 
 > 状态：**P2c-fix — pre_tool_call hook 单执行（异步版），双执行已消除**。P2b 的
 > origin→contextId 注入保留；P2c 直播消费者改在 `pre_tool_call` hook 内对 dsh 目标
@@ -58,12 +58,12 @@ Hermes 内置 A2A 插件向 agent 暴露 5 个 outbound client 工具（**裸名
 
 ```bash
 # 方式 A：CLI 命令（推荐）
-hermes plugins enable hermes-a2a-bridge
+hermes plugins enable dsh-hermes-link
 
 # 方式 B：直接编辑 ~/.hermes/config.yaml，在 plugins.enabled 列表加一项：
 #   plugins:
 #     enabled:
-#       - hermes-a2a-bridge
+#       - dsh-hermes-link
 ```
 
 开启后**必须重启 Hermes 网关才能加载**（插件发现是一次性、进程内缓存，无热重载）——重启方式取决于你的部署：
@@ -79,7 +79,7 @@ systemctl --user restart hermes-gateway
 
 ```sh
 mkdir -p ~/.hermes/plugins
-git clone https://github.com/ArtomYuan/hermes-a2a-bridge ~/.hermes/plugins/hermes-a2a-bridge
+git clone https://github.com/ArtomYuan/dsh-hermes-link ~/.hermes/plugins/dsh-hermes-link
 ```
 
 ### 方式 B：pip 结构（后续）
@@ -88,7 +88,7 @@ TODO(P2c)：如改为 pip 包，补充 `pyproject.toml` + entry point 安装说�
 
 > **注**：以上只涉及插件文件部署。**重启 Hermes 网关的方式取决于你的 Hermes 部署形态**（用户级/系统级 systemd 服务、前台进程、Docker 容器等）——本文档中出现的 `systemctl --user restart hermes-gateway` 均为「用户级 systemd 服务」**示例**，请按实际部署方式重启。
 
-## 与 dsh-a2a-server 配合
+## 与 dsh-hermes-link 配合
 
 本插件负责在 Hermes 侧注入 `context_id`（并可选地对 dsh 目标做流式单执行，见下）。
 要让会话令牌真正产生「一个 Hermes 对话 session ↔ 一个 dsh 会话」的连续性，还需 dsh
@@ -96,7 +96,7 @@ TODO(P2c)：如改为 pip 包，补充 `pyproject.toml` + entry point 安装说�
 
 ### Hermes 侧 a2a_agents 配置
 
-Hermes 作为 A2A client，在 `~/.hermes/config.yaml` 把 dsh-a2a-server 配为 peer：
+Hermes 作为 A2A client，在 `~/.hermes/config.yaml` 把 dsh-hermes-link 配为 peer：
 
 ```yaml
 a2a_agents:
@@ -109,9 +109,9 @@ a2a_agents:
     capabilities: [coding, terminal, research, web_search]
 ```
 
-### dsh 侧 dsh-a2a-server 配置
+### dsh 侧 dsh-hermes-link 配置
 
-dsh 侧由 `dsh-a2a-server` 库（`ArtomYuan/dsh-a2a-server`）暴露 A2A server，其
+dsh 侧由 `dsh-hermes-link` 库（`ArtomYuan/dsh-hermes-link`）暴露 A2A server，其
 `Config`（cordis.yml 插件 `config`）字段：`port`（缺省探测 8092/8093/8094 首个空闲）、
 `host`（默认 `127.0.0.1`）、`authToken`（Bearer，也可从环境 `A2A_SERVER_TOKEN` 读）、
 `provider` / `model` / `preset` / `cwd` / `contextMapPath` / `contextMapTtlDays`。
@@ -124,7 +124,7 @@ dsh 侧由 `dsh-a2a-server` 库（`ArtomYuan/dsh-a2a-server`）暴露 A2A server
    （调用方**已显式给出**非空 `context_id` / `contextId` 时**不注入、不覆盖**，原样
    采用该值），框架浅合并进 `message.contextId`（A2A 协议
    `text_message(..., context_id=ctx)`）。
-3. dsh-a2a-server 收到 `message.contextId`，把它作为会话复用键：同一 Hermes 对话
+3. dsh-hermes-link 收到 `message.contextId`，把它作为会话复用键：同一 Hermes 对话
    重复投递 → 复用同一 dsh 会话（上下文连续）；不同对话 → 不同 contextId → 隔离。
 4. 显式传入 `context_id` / `contextId` 时保留调用方语义（可主动续接既有会话或指定
    键）；v0.5.1 起该值同时作为**直播 origin**——带显式 `context_id` 的 `a2a_call`
@@ -162,7 +162,7 @@ handler），故弃用 override，改在 `pre_tool_call` hook 内做**单执行*
 ### 请求级选项：工作区与沙箱档（§2.1/§2.4，v0.9.0 起）
 
 `a2a_call` 可带两个**可选**参数，随首投报文的 `message.metadata` 传给服务端
-（`dsh-a2a-server` ≥0.7.0）；**不带即现状**，通用区投递行为逐字不变。
+（`dsh-hermes-link` ≥0.7.0）；**不带即现状**，通用区投递行为逐字不变。
 
 | 参数 | 取值 | 服务端行为 |
 | --- | --- | --- |
@@ -179,7 +179,7 @@ handler），故弃用 override，改在 `pre_tool_call` hook 内做**单执行*
   `FAILED` 收口，且**失败原因会随结果送回本线**（桥从 `statusUpdate(FAILED)` 的状态消息
   里取 `Agent execution error: …` 作为正文，不再只报「本次无文本输出」）。
 - **工具 schema 现状（如实）**：`a2a_call` 的参数表由 Hermes 内置 `platforms/a2a` 插件定义
-  （只有 `agent`/`message`/`context_id`），**不在本插件与 dsh-a2a-server 的改动范围**。
+  （只有 `agent`/`message`/`context_id`），**不在本插件与 dsh-hermes-link 的改动范围**。
   因此这两个参数不会出现在工具的参考说明里——需要调用方（模型）**显式传参**（由线路
   指令/提示要求，或后续给内置插件补 schema）。参数能透传（schema 未禁额外属性），
   但"模型会不会自然想到传"不保证。
@@ -244,7 +244,7 @@ handler），故弃用 override，改在 `pre_tool_call` hook 内做**单执行*
 `question` 事件；`enabled=false` 时整条问答通路不被触发，行为与升级前一致。多出的只有
 **两处运行期前置**（都不是配置）：① 飞书适配器的正式补丁（提供
 `register_ask_action_handler` 与 `is_ws_ready()`，见 `docs/hermes/custom-patches.md`）；
-② 服务端 `dsh-a2a-server` ≥0.6.0（认领提问并支持 `taskId` 续投解挂）。任一缺失都会在
+② 服务端 `dsh-hermes-link` ≥0.6.0（认领提问并支持 `taskId` 续投解挂）。任一缺失都会在
 直播起手时**响亮告警**，不会静默失效。
 
 ### 排查：某会话为何没有直播消息？（v0.5.1）
@@ -306,7 +306,7 @@ handler），故弃用 override，改在 `pre_tool_call` hook 内做**单执行*
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           enabled: true           # 直播发送门控
@@ -321,7 +321,7 @@ plugins:
 
 ### 直播档位（collector.live_detail）
 
-完整键路径：`plugins.entries.hermes-a2a-bridge.settings.collector.live_detail`。
+完整键路径：`plugins.entries.dsh-hermes-link.settings.collector.live_detail`。
 
 直播的**过程展示粒度**由该键控制（默认 `follow-dsh`：跟随 dsh 当前档位）。四档与
 dsh 的「工作步骤展示（Work details）」——即 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`
@@ -339,7 +339,7 @@ dsh 的「工作步骤展示（Work details）」——即 `$DSH_HOME/profiles/<
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           enabled: true
@@ -652,7 +652,7 @@ v0.7.0 起直播过程与回复**一律为纯文本行**，逐行复刻 dsh 客�
 
 ### 事件流开关（collector.events）
 
-完整键路径：`plugins.entries.hermes-a2a-bridge.settings.collector.events`。
+完整键路径：`plugins.entries.dsh-hermes-link.settings.collector.events`。
 
 是否推送「中间事件」可用该键单独开关（默认 `true`）。它与 `collector.live_detail`
 正交：`live_detail` 控制**过程组的展示粒度**（四档），`events` 控制**推送范围**
@@ -666,7 +666,7 @@ v0.7.0 起直播过程与回复**一律为纯文本行**，逐行复刻 dsh 客�
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           enabled: true
@@ -682,7 +682,7 @@ plugins:
 
 ### 卡片直播（collector.card，v0.7.2 起；v0.7.3 扩到全内容）
 
-完整键路径：`plugins.entries.hermes-a2a-bridge.settings.collector.card`。
+完整键路径：`plugins.entries.dsh-hermes-link.settings.collector.card`。
 
 | 值 | 含义 |
 | --- | --- |
@@ -693,7 +693,7 @@ plugins:
 # ~/.hermes/config.yaml
 plugins:
   entries:
-    hermes-a2a-bridge:
+    dsh-hermes-link:
       settings:
         collector:
           card: panel      # off（默认）/ panel
@@ -747,13 +747,13 @@ Hermes 自身的消息（转述 / 系统提示等）**不经本插件**，保持
 
 后端端点（挂在 dashboard 进程，与 gateway 解耦）：
 
-- `GET /api/plugins/hermes-a2a-bridge/collector` — 三开关当前值与默认值元数据
+- `GET /api/plugins/dsh-hermes-link/collector` — 三开关当前值与默认值元数据
   （`enabled` / `events` / `live_detail`），并回显 `live_detail` 的**实际生效档位**
   （`follow-dsh` 时给出解析结果）；**不返回任何密钥**，也永不返回已废弃的
   `code_blocks` 键。
-- `POST /api/plugins/hermes-a2a-bridge/collector` — 严格校验（`enabled` / `events`
+- `POST /api/plugins/dsh-hermes-link/collector` — 严格校验（`enabled` / `events`
   只接受布尔，`live_detail` 只接受 5 个字符串枚举值，非法值与多余键一律拒绝）后
-  原子写回 `plugins.entries.hermes-a2a-bridge.settings.collector.*`；写回保留条目
+  原子写回 `plugins.entries.dsh-hermes-link.settings.collector.*`；写回保留条目
   顶层 `allow_tool_override` 与文件中其它所有键。失败返回 4xx/5xx 与明确 detail，
   不静默吞。升级窗口内旧面板 POST 的 `code_blocks` 被容忍为遗留 `content` 的
   deprecated 别名（`content` 键本身在配置层继续兼容）。
@@ -825,7 +825,7 @@ a2a_call（pre_tool_call hook）
 1. 加载确认：`~/.hermes/logs/agent.log` 出现 plugin discovery 汇总，且无
    `collector.enabled` 读取报错。
 2. 配置确认：`collector.enabled: true` 已写入
-   `plugins.entries.hermes-a2a-bridge.settings`。
+   `plugins.entries.dsh-hermes-link.settings`。
 3. 行为确认：飞书 / QQ 对话让 agent 调 `a2a_call(agent="dsh", ...)`，观察 ①agent
    立即（秒级）收到「已受理」回执、不再长阻塞；②对话收到
    **一条 dsh 行形态过程组**（组头 `⌄ <类别串>` + 步骤行 `▸ <工具标题> · <摘要>` +
@@ -833,7 +833,7 @@ a2a_call（pre_tool_call hook）
    160、`detailed` 另出结果体、`verbose` 无组头且不截断），随后收到收束行
    `▸ 已完成`（或 `▸ 已完成，用时 <n>秒`）
    （默认 `follow-dsh` 跟随 dsh 当前档位），且
-   **dsh 只执行一次**（dsh-a2a-server 日志只出现一次 task 提交）；
+   **dsh 只执行一次**（dsh-hermes-link 日志只出现一次 task 提交）；
    ③任务结束时对话收到「📬 dsh 任务完成，结果如下」结果消息（头行 + 空行 +
    **结果原文**，普通 markdown、不截断）。
    另（v0.5.1）：让调用**显式携带 `context_id`** 的 `a2a_call` 同样触发上述回执与
@@ -845,7 +845,7 @@ a2a_call（pre_tool_call hook）
 6. Dashboard 面板确认：插件管理页顶部出现「A2A 直播开关」卡片，三开关（含直播档位
    下拉的 5 个选项，以及 `follow-dsh` 时的实际生效档位回显）与
    config.yaml 当前值一致；点选改动后 `GET /collector` 与
-   `~/.hermes/config.yaml` 的 `plugins.entries.hermes-a2a-bridge.settings.collector.*`
+   `~/.hermes/config.yaml` 的 `plugins.entries.dsh-hermes-link.settings.collector.*`
    同步变化（条目顶层 `allow_tool_override` 与其它键不丢）。首次部署面板需先重启
    一次 dashboard 进程（后端路由与插件发现是一次性的）。
 7. 直播档位确认：把 `collector.live_detail` 依次设为 `compact` / `standard` /
@@ -879,7 +879,7 @@ python3 tests/test_silence_fix.py
 ```
 
 `test_origin_injection.py` 覆盖 origin→contextId 注入（纯静态，通过 `sys.modules`
-注入假的 `gateway.session_context`）。`test_consumer.py` 用与 dsh-a2a-server 真实格式
+注入假的 `gateway.session_context`）。`test_consumer.py` 用与 dsh-hermes-link 真实格式
 一致的合成 SSE `data:` 串驱动 `parse_sse_lines` + `normalize_events` + `render_line`
 + `Throttler` + `render_process_group` + `render_turn_close` + `make_sender`（mock
 sender 记录发送列表），覆盖归一化事件种类与顺序、叙述文本原样 markdown（无 `📖` 前缀）、
@@ -934,7 +934,7 @@ gateway 生效需重启（见「启用」）。本阶段不重启；真实 gatew
 
 - 加载确认：`~/.hermes/logs/agent.log` 出现 plugin discovery 汇总。
 - 行为确认：messaging 对话里让 agent 调 `a2a_call` / `a2a_orchestrate`，观察
-  dsh-a2a-server 收到的 `message.contextId` 是否为 `{platform}/{chat_id}[/{thread_id}]`。
+  dsh-hermes-link 收到的 `message.contextId` 是否为 `{platform}/{chat_id}[/{thread_id}]`。
 
 ## 边界与注意
 

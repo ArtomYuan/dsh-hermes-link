@@ -1,5 +1,5 @@
 /**
- * dsh-a2a-server 设置卡片的浏览器半边：注册双语文案，并把 A2A 卡片挂进设置面板。
+ * dsh-hermes-link 设置卡片的浏览器半边：注册双语文案，并把 A2A 卡片挂进设置面板。
  *
  * 双版本互斥挂载（能力探测，见 mount-strategy.ts）：
  *  - 0.1.5：`settingsScope` + `settings.plugin.item` 槽（key = settings 命名空间
@@ -33,7 +33,7 @@ import { en, zh } from './locales.ts'
 import { pickClientMount, type ClientMountStrategy } from './mount-strategy.ts'
 
 /** Cordis 插件名 */
-export const name = '@artomyuan/dsh-a2a-server'
+export const name = '@artomyuan/dsh-hermes-link'
 
 /** 依赖的服务（settingsScope / configForms 走嵌套 inject，见模块注释） */
 export const inject = ['slots', 'locale']
@@ -85,7 +85,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  * @param ctx - 浏览器插件 context
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-a2a-server: card dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-hermes-link: card dictionaries')
 
   const t = ctx.locale.bind(NS)
   /** 0.1.5 与 0.2.0 的设置服务跨版本互斥，正常 host 上只触发其一；标志防病态双服务 */
@@ -133,6 +133,6 @@ export function apply(ctx: ClientContext): void {
       label: () => t('a2aTitle'),
       locale: NS,
       inject: () => controller.inject(),
-    }, A2ASettingsCard))), 'dsh-a2a-server: page')
+    }, A2ASettingsCard))), 'dsh-hermes-link: page')
   })
 }

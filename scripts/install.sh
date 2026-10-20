@@ -59,7 +59,7 @@ install_server() {
     say "── 2) 备份现有服务端安装 → ${SERVER_PKG_DIR}.bak.<ts> ──"
     backup_dir "$SERVER_PKG_DIR"
   fi
-  say "── 3) 落位服务端文件（包名 @artomyuan/dsh-a2a-server 不变）──"
+  say "── 3) 落位服务端文件（包名 @artomyuan/dsh-hermes-link 不变）──"
   act "mkdir -p '$SERVER_PKG_DIR'"
   for f in package.json lib client cordis.patch.yml README.md README.en.md CHANGELOG.md CHANGELOG.en.md CONFIGURATION.md CONFIGURATION.en.md LICENSE; do
     if [ -e "$ROOT/dsh/$f" ]; then act "cp -a '$ROOT/dsh/$f' '$SERVER_PKG_DIR/'"; fi

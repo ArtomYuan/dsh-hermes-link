@@ -1,12 +1,12 @@
 /**
- * hermes-a2a-bridge — Dashboard panel: A2A live switches.
+ * dsh-hermes-link — Dashboard panel: A2A live switches.
  *
  * Collector settings rendered as one card at the top of the "Plugins" page
  * (slot "plugins:top") and also registered for the hidden tab route
- * /hermes-a2a-bridge. Two toggles (collector.enabled / collector.events) plus
+ * /dsh-hermes-link. Two toggles (collector.enabled / collector.events) plus
  * one detail-level dropdown (collector.live_detail: follow-dsh / compact /
  * standard / detailed / verbose). Reads current values from
- * GET /api/plugins/hermes-a2a-bridge/collector; each control POSTs its own key
+ * GET /api/plugins/dsh-hermes-link/collector; each control POSTs its own key
  * back. Changes take effect immediately (the gateway hot-reads ctx.get_config
  * on every hook / stream task) — no gateway restart needed.
  *
@@ -57,8 +57,8 @@
   };
   var Toast = SDK.components.Toast;
 
-  var PLUGIN_NAME = "hermes-a2a-bridge";
-  var API = "/api/plugins/hermes-a2a-bridge/collector";
+  var PLUGIN_NAME = "dsh-hermes-link";
+  var API = "/api/plugins/dsh-hermes-link/collector";
   var KEYS = ["enabled", "events", "live_detail"];
 
   // live_detail 下拉选项（5 项，与后端 _LIVE_DETAIL_VALUES 一致）。
@@ -274,7 +274,7 @@
     P.registerSlot(PLUGIN_NAME, "plugins:top", Panel);
   }
   if (P && typeof P.register === "function") {
-    // Hidden tab route fallback (/hermes-a2a-bridge); also marks the bundle
+    // Hidden tab route fallback (/dsh-hermes-link); also marks the bundle
     // as registered so the host does not flag NO_REGISTER.
     P.register(PLUGIN_NAME, Panel);
   }

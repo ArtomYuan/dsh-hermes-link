@@ -1,4 +1,4 @@
-"""hermes-a2a-bridge — §2.6 交互问答桥接（问题卡 · 作答登记表 · 续投资料）.
+"""dsh-hermes-link — §2.6 交互问答桥接（问题卡 · 作答登记表 · 续投资料）.
 
 三块职责，全部纯标准库、零 gateway 依赖，故可直接单测：
 
@@ -222,11 +222,11 @@ def guard_card(card: Dict[str, Any], *, context: str = "question") -> Dict[str, 
     components = component_count(card)
     if size > MAX_CARD_BYTES:
         logger.warning(
-            "hermes-a2a-bridge: %s 卡超字节预算 %d/%d——平台可能拒收", context, size, MAX_CARD_BYTES
+            "dsh-hermes-link: %s 卡超字节预算 %d/%d——平台可能拒收", context, size, MAX_CARD_BYTES
         )
     if components > MAX_CARD_COMPONENTS:
         logger.warning(
-            "hermes-a2a-bridge: %s 卡超组件预算 %d/%d——平台可能拒收",
+            "dsh-hermes-link: %s 卡超组件预算 %d/%d——平台可能拒收",
             context, components, MAX_CARD_COMPONENTS,
         )
     return card
@@ -450,7 +450,7 @@ def handle_card_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     slot = lookup_ask(ask_id) if ask_id else None
     if slot is None:
         logger.warning(
-            "hermes-a2a-bridge: 收到未知/已过期提问卡的点击 ask_id=%r qid=%r operator=%s",
+            "dsh-hermes-link: 收到未知/已过期提问卡的点击 ask_id=%r qid=%r operator=%s",
             ask_id, qid, by,
         )
         return ack_card(
@@ -464,7 +464,7 @@ def handle_card_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if decoded["kind"] == "invalid":
         logger.warning(
-            "hermes-a2a-bridge: 提问卡点击的选项无法识别（越界序号/未知标签），已拒绝 ask_id=%r qid=%r "
+            "dsh-hermes-link: 提问卡点击的选项无法识别（越界序号/未知标签），已拒绝 ask_id=%r qid=%r "
             "choice=%r label=%r operator=%s",
             ask_id, qid, action_value.get("choice"), action_value.get("label"), by,
         )
@@ -486,11 +486,11 @@ def handle_card_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         body = _answer_summary(decoded)
     if not delivered:
         logger.warning(
-            "hermes-a2a-bridge: 重复/失效点击被忽略 ask_id=%r qid=%r operator=%s", ask_id, qid, by,
+            "dsh-hermes-link: 重复/失效点击被忽略 ask_id=%r qid=%r operator=%s", ask_id, qid, by,
         )
         return ack_card(title="✅ 已作答（重复点击已忽略）", body="本题此前已作答，本次点击未生效。", template="grey")
     logger.info(
-        "hermes-a2a-bridge: 提问作答回传 ask_id=%s qid=%s kind=%s selected=%s custom=%r by=%s",
+        "dsh-hermes-link: 提问作答回传 ask_id=%s qid=%s kind=%s selected=%s custom=%r by=%s",
         ask_id, qid, decoded["kind"], decoded["selected"],
         (decoded["custom"] or "")[:60], by,
     )

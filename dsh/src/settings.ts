@@ -1,5 +1,5 @@
 /**
- * dsh-a2a-server 的 settings 命名空间（host 半边）。
+ * dsh-hermes-link 的 settings 命名空间（host 半边）。
  *
  * 0.1.5：通过官方 settings seam（`ctx.settings.installSection`）注册 `a2a-server`
  * 命名空间：cordis entry config 作为 base 层，面板写入落在 `$DSH_HOME/
@@ -177,7 +177,7 @@ export function installA2ASettings(
           // port 的 1–65535 整数约束已由 schema 表达，这里不再重复。
           validate: (value) => {
             if (value.host !== undefined && value.host.trim().length === 0) {
-              throw new TypeError('[dsh-a2a-server] settings host must not be an empty string')
+              throw new TypeError('[dsh-hermes-link] settings host must not be an empty string')
             }
           },
           setSource: (current) => {
@@ -200,7 +200,7 @@ export function installA2ASettings(
           base: entry,
           validate: (value: A2ASettings) => {
             if (value.host !== undefined && value.host.trim().length === 0) {
-              throw new TypeError('[dsh-a2a-server] settings host must not be an empty string')
+              throw new TypeError('[dsh-hermes-link] settings host must not be an empty string')
             }
           },
         }) as {
@@ -227,7 +227,7 @@ export function installA2ASettings(
         // 不再声称面板不可用。0.2.0 上表单编辑落点是 profile 的
         // `cordis.patch.yml`（见 CONFIGURATION「设置面板在 0.2.0」）。
         console.info(
-          '[dsh-a2a-server] dsh 0.2.0 ships no installSection/register seam: ' +
+          '[dsh-hermes-link] dsh 0.2.0 ships no installSection/register seam: ' +
             'the settings area is derived from the exported Config schema (namespace "a2a-server"); ' +
             'form edits land in the profile cordis.patch.yml',
         )
@@ -238,7 +238,7 @@ export function installA2ASettings(
       // 的话 apply 抛 → 本 fiber FAILED → `dsh web` 整个起不来。宁可大声降级
       // 为「只用 cordis entry config」，保住 A2A 服务本身。
       console.warn(
-        '[dsh-a2a-server] settings section registration failed; falling back to cordis entry config only:',
+        '[dsh-hermes-link] settings section registration failed; falling back to cordis entry config only:',
         (e as Error)?.message ?? e,
       )
     }

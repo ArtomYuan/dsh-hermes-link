@@ -1,4 +1,4 @@
-# dsh-a2a-server bundle patch: inserts the A2A server plugin over a dsh-base
+# dsh-hermes-link bundle patch: inserts the A2A server plugin over a dsh-base
 # composition. dsh-base provides the agent spine (ctx.agents), an LLM adapter,
 # and the session surface.
 #
@@ -12,4 +12,4 @@
 # must add the `agent-presets` row themselves in their profile patch layer.
 - insert:
     - id: a2a-server
-      name: '@artomyuan/dsh-a2a-server'
+      name: '@artomyuan/dsh-hermes-link'

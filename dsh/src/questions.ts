@@ -10,7 +10,7 @@
  * 作答沿 A2A 原生 `taskId` 续投回来，按 `askId` 解挂。**全程零超时**：只有
  * 「作答 / 调用方中止 / 任务收场」三种出口，任何一种都不留悬挂。
  *
- * @module dsh-a2a-server/questions
+ * @module dsh-hermes-link/questions
  */
 
 import { randomUUID } from 'node:crypto'
@@ -185,7 +185,7 @@ export function claimQuestion(
       metadata: {},
     }),
   )
-  console.log(`[dsh-a2a-server] 提问挂起: task=${taskId} ask=${askId} 题数=${items.length}`)
+  console.log(`[dsh-hermes-link] 提问挂起: task=${taskId} ask=${askId} 题数=${items.length}`)
 
   return new Promise<QuestionAnswerItem[]>((resolve, reject) => {
     let settled = false
@@ -259,11 +259,11 @@ export function resolveQuestion(
   let entry = answer.askId !== undefined ? byAsk.get(answer.askId) : undefined
   if (entry === undefined && byAsk.size === 1 && answer.askId === undefined) {
     entry = [...byAsk.values()][0]
-    console.warn(`[dsh-a2a-server] 问答续投未带 askId，按唯一未决提问降级命中: task=${taskId} ask=${entry.askId}`)
+    console.warn(`[dsh-hermes-link] 问答续投未带 askId，按唯一未决提问降级命中: task=${taskId} ask=${entry.askId}`)
   }
   if (entry === undefined) {
     console.warn(
-      `[dsh-a2a-server] 问答续投令牌不匹配: task=${taskId} askId=${answer.askId ?? '(none)'}` +
+      `[dsh-hermes-link] 问答续投令牌不匹配: task=${taskId} askId=${answer.askId ?? '(none)'}` +
       ` 未决=${[...byAsk.keys()].join(',')}——已忽略本次作答`,
     )
     return false
@@ -271,11 +271,11 @@ export function resolveQuestion(
   if (answer.skipped === true) {
     // 用户点了「跳过」：如实以中止收口（dsh 侧 `ask()` 会把错误作为工具结果回报），
     // 不伪造一个空作答——空答对模型是「用户什么都没说」，与「明确不答」不是一回事。
-    console.log(`[dsh-a2a-server] 问答跳过: task=${taskId} ask=${entry.askId}`)
+    console.log(`[dsh-hermes-link] 问答跳过: task=${taskId} ask=${entry.askId}`)
     entry.settle({ error: new Error('the user skipped the question') })
     return true
   }
-  console.log(`[dsh-a2a-server] 问答解挂: task=${taskId} ask=${entry.askId}`)
+  console.log(`[dsh-hermes-link] 问答解挂: task=${taskId} ask=${entry.askId}`)
   entry.settle({ answers: answer.answers })
   return true
 }
@@ -284,7 +284,7 @@ export function resolveQuestion(
 export function abandonQuestions(taskId: string): void {
   const byAsk = pendingQuestions.get(taskId)
   if (byAsk === undefined || byAsk.size === 0) return
-  console.warn(`[dsh-a2a-server] 任务收场仍存未决提问 ${byAsk.size} 个，全部放行: task=${taskId}`)
+  console.warn(`[dsh-hermes-link] 任务收场仍存未决提问 ${byAsk.size} 个，全部放行: task=${taskId}`)
   for (const entry of [...byAsk.values()]) {
     entry.settle({ error: new Error('the task ended before the user answered') })
   }

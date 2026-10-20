@@ -1,9 +1,9 @@
 # dsh-hermes-link
 
 > **Hermes ⇄ DeepSeek Harness 连接层：一个产品、一个仓库、一套版本、一次安装。**
-> 自 2026-10-19 起，原 `hermes-a2a-bridge`（Python 桥）与 `dsh-a2a-server`（TS 服务端）
-> 合并到本仓库（两树带完整历史：`hermes/`、`dsh/`）。**两个包名与安装路径都不变**：
-> 桥仍是 Hermes 插件 `hermes-a2a-bridge`，服务端仍是 npm 包 `@artomyuan/dsh-a2a-server`。
+> 自 2026-10-19 起，本仓库由早期两个独立包（Hermes 桥插件 + dsh A2A 服务端）合并而来
+> （两树带完整历史：`hermes/`、`dsh/`）；0.10.1 起两者统一改用本名（历史包名已冻结）。
+> 桥是 Hermes 插件 **`dsh-hermes-link`**，服务端是 npm 包 **`@artomyuan/dsh-hermes-link`**。
 
 ## 形态
 
@@ -58,14 +58,15 @@ hermes/: python3 -B tests/test_*.py（逐文件）
 ## 回退
 
 1. `scripts/uninstall.sh`（先退桥、后退服务端）→ 宿主侧重载两进程；
-2. 或按冻结 tag 整体回退：旧库 tag `hermes-a2a-bridge@v0.9.0` / `dsh-a2a-server@v0.7.0`
+2. 或按冻结 tag 整体回退：旧库 tag `dsh-hermes-link@v0.9.0` / `dsh-hermes-link@v0.7.0`
    （合并前基线的完整可运行状态）。
 
 ## English (short)
 
-`dsh-hermes-link` merges the Hermes bridge (`hermes/`, Python plugin, package name
-`hermes-a2a-bridge`) and the dsh A2A server (`dsh/`, npm package
-`@artomyuan/dsh-a2a-server`) into one repository with one lock-step version, a single
+`dsh-hermes-link` bundles the Hermes bridge (`hermes/`, Python plugin, package name
+`dsh-hermes-link`) and the dsh A2A server (`dsh/`, npm package
+`@artomyuan/dsh-hermes-link`) — merged from two early standalone packages — into one
+repository with one lock-step version, a single
 protocol source (`protocol/link-protocol.json` → generated Python/TypeScript constants),
 shared contract fixtures (`tests/contract/`), and a one-command installer
 (`scripts/install.sh`, server-first ordering gate; `scripts/verify.sh`; `scripts/uninstall.sh`

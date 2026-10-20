@@ -71,7 +71,7 @@ function dataPart(value) {
   return { content: { $case: 'data', value }, metadata: undefined, filename: '', mediaType: 'application/json' }
 }
 
-/** 报文：与 hermes-a2a-bridge `_streaming_message_body` 同形 */
+/** 报文：与 dsh-hermes-link `_streaming_message_body` 同形 */
 function streamingEnvelope({ messageId, text, contextId, taskId }) {
   const message = {
     role: 'ROLE_USER',

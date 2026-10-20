@@ -1,4 +1,4 @@
-"""hermes-a2a-bridge — Hermes 侧接入 dsh A2A server 的桥插件.
+"""dsh-hermes-link — Hermes 侧接入 dsh A2A server 的桥插件.
 
 背景
 ----
@@ -176,7 +176,7 @@ def _read_switch_raw(key: str, default: Any) -> Any:
         try:
             return _CTX.get_config(key, default)
         except Exception as exc:  # 读配置失败不阻断工具调用
-            logger.warning("hermes-a2a-bridge: hot-read %s failed: %s", key, exc)
+            logger.warning("dsh-hermes-link: hot-read %s failed: %s", key, exc)
             return default
     return globals().get(_SWITCH_GLOBAL_BY_KEY.get(key, ""), default)
 
@@ -237,7 +237,7 @@ def _build_origin() -> str:
         )
     except Exception as exc:  # 插件故障绝不阻断工具调用
         logger.warning(
-            "hermes-a2a-bridge: failed to import gateway.session_context: %s", exc
+            "dsh-hermes-link: failed to import gateway.session_context: %s", exc
         )
         return ""
 
@@ -300,7 +300,7 @@ def _dsh_peer() -> Optional[Dict[str, Any]]:
     try:
         from hermes_cli.config import load_config
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: hermes_cli.config unavailable: %s", exc)
+        logger.warning("dsh-hermes-link: hermes_cli.config unavailable: %s", exc)
         return None
     try:
         cfg = load_config() or {}
@@ -308,7 +308,7 @@ def _dsh_peer() -> Optional[Dict[str, Any]]:
         entry = peers.get("dsh")
         return entry if isinstance(entry, dict) else None
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: failed to read a2a_agents.dsh: %s", exc)
+        logger.warning("dsh-hermes-link: failed to read a2a_agents.dsh: %s", exc)
         return None
 
 
@@ -334,7 +334,7 @@ def _import_consumer():
     try:
         from . import consumer as _consumer
     except (ImportError, ValueError) as exc:
-        logger.debug("hermes-a2a-bridge: relative consumer import failed: %s", exc)
+        logger.debug("dsh-hermes-link: relative consumer import failed: %s", exc)
         import importlib.util
         import os
 
@@ -373,10 +373,10 @@ def _ensure_ask_action_handler(platform: str) -> None:
         runner = _gateway_runner_ref()
         adapter = runner.adapters.get(Platform(platform)) if runner is not None else None
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: 取适配器失败，问答卡回调暂不可挂: %s", exc)
+        logger.warning("dsh-hermes-link: 取适配器失败，问答卡回调暂不可挂: %s", exc)
         return
     if adapter is None:
-        logger.warning("hermes-a2a-bridge: 未找到 %s 适配器，问答卡回调暂不可挂", platform)
+        logger.warning("dsh-hermes-link: 未找到 %s 适配器，问答卡回调暂不可挂", platform)
         return
     module = sys.modules.get(type(adapter).__module__)
     if module is None:
@@ -385,12 +385,12 @@ def _ensure_ask_action_handler(platform: str) -> None:
 
             module = importlib.import_module(type(adapter).__module__)
         except Exception as exc:
-            logger.warning("hermes-a2a-bridge: 定位适配器模块失败（%s）: %s", type(adapter).__module__, exc)
+            logger.warning("dsh-hermes-link: 定位适配器模块失败（%s）: %s", type(adapter).__module__, exc)
             return
     register = getattr(module, "register_ask_action_handler", None)
     if not callable(register):
         logger.warning(
-            "hermes-a2a-bridge: 适配器模块 %s 无 register_ask_action_handler"
+            "dsh-hermes-link: 适配器模块 %s 无 register_ask_action_handler"
             "（问答桥接补丁未打或版本不符）——提问卡将无法回传作答",
             type(adapter).__module__,
         )
@@ -398,10 +398,10 @@ def _ensure_ask_action_handler(platform: str) -> None:
     try:
         register(_import_qna().handle_card_action)
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: 注册问答卡处理器失败: %s", exc)
+        logger.warning("dsh-hermes-link: 注册问答卡处理器失败: %s", exc)
         return
     _ASK_HANDLER_REGISTERED.add(platform)
-    logger.info("hermes-a2a-bridge: 问答卡回调已挂到 %s 适配器（同进程直连）", platform)
+    logger.info("dsh-hermes-link: 问答卡回调已挂到 %s 适配器（同进程直连）", platform)
 
 
 def _load_link_protocol():
@@ -424,7 +424,7 @@ _P = _load_link_protocol()
 
 
 # §2.1/§2.4 请求级选项：a2a_call 的透传参数名 → A2A message.metadata 键。
-# 与 consumer 侧同名字面量（两侧有用例锁一致）；服务端 dsh-a2a-server 按同名键读取。
+# 与 consumer 侧同名字面量（两侧有用例锁一致）；服务端 dsh-hermes-link 按同名键读取。
 WORKSPACE_META_KEY = _P.METADATA_WORKSPACE
 SANDBOX_META_KEY = _P.METADATA_SANDBOX
 SANDBOX_TIERS = _P.SANDBOX_TIERS
@@ -509,7 +509,7 @@ def _stream_dsh_call(
     normalized, reason = _normalize_origin_token(context_id)
     if normalized and normalized != context_id:
         logger.info(
-            "hermes-a2a-bridge: context_id 归一化 %r -> %r", context_id, normalized
+            "dsh-hermes-link: context_id 归一化 %r -> %r", context_id, normalized
         )
         context_id = normalized
     parts = context_id.split("/") if context_id else []
@@ -520,7 +520,7 @@ def _stream_dsh_call(
     live_routable = bool(platform and chat_id)
     if not live_routable:
         logger.warning(
-            "hermes-a2a-bridge: context_id 未能得出 platform/chat_id，"
+            "dsh-hermes-link: context_id 未能得出 platform/chat_id，"
             "本次直播与结果送达已禁用（任务仍会执行，报告仅落工作区）；"
             "context_id=%r platform=%r chat_id=%r reason=%s",
             context_id,
@@ -546,7 +546,7 @@ def _stream_dsh_call(
         else lambda p, c, t, text, card=None: {"ok": True}  # noqa: E731  # 不真实发送
     )
     logger.info(
-        "hermes-a2a-bridge: hook stream dsh agent=dsh msg_len=%d context_id=%r "
+        "dsh-hermes-link: hook stream dsh agent=dsh msg_len=%d context_id=%r "
         "platform=%s chat_id=%s live=%s",
         len(message),
         context_id,
@@ -579,7 +579,7 @@ def _stream_dsh_call(
         consume_kwargs["extra_metadata"] = request_meta
     stats = consumer.consume_stream(**consume_kwargs)
     logger.info(
-        "hermes-a2a-bridge: hook stream consumed events_seen=%s messages_sent=%s "
+        "dsh-hermes-link: hook stream consumed events_seen=%s messages_sent=%s "
         "final_text=%.80r",
         stats.get("events_seen"),
         stats.get("messages_sent"),
@@ -594,7 +594,7 @@ def _stream_dsh_call(
     failure_reason = stats.get("failure_reason") or ""
     if not final_text and failure_reason:
         final_text = f"⚠️ 任务{('已取消' if state == 'canceled' else '失败')}——原因：{failure_reason}"
-        logger.info("hermes-a2a-bridge: 任务终态无正文，已用服务端失败原因替代正文")
+        logger.info("dsh-hermes-link: 任务终态无正文，已用服务端失败原因替代正文")
     header = f"[dsh · context {context_id or '(auto)'}"
     if state:
         header += f" · {state}"
@@ -678,7 +678,7 @@ def _deliver_final_result(
         consumer = _import_consumer()
         sender = consumer.make_sender(_CTX)
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: result sender unavailable: %s", exc)
+        logger.warning("dsh-hermes-link: result sender unavailable: %s", exc)
         return
     elapsed = time.time() - started_at
     items: list = [(_format_result_message(final_text, state, elapsed), None)]
@@ -696,18 +696,18 @@ def _deliver_final_result(
                     res = sender(platform, chat_id, thread_id, text, card=item_card)
             except Exception as exc:
                 logger.warning(
-                    "hermes-a2a-bridge: result delivery raised (attempt %d): %s",
+                    "dsh-hermes-link: result delivery raised (attempt %d): %s",
                     attempt,
                     exc,
                 )
                 continue
             if isinstance(res, dict) and res.get("ok"):
                 logger.info(
-                    "hermes-a2a-bridge: final result delivered (%d chars)", len(text)
+                    "dsh-hermes-link: final result delivered (%d chars)", len(text)
                 )
                 break
             logger.warning(
-                "hermes-a2a-bridge: result delivery failed (attempt %d): %s",
+                "dsh-hermes-link: result delivery failed (attempt %d): %s",
                 attempt,
                 res.get("error") if isinstance(res, dict) else res,
             )
@@ -723,7 +723,7 @@ def _stream_worker(
         else:
             _stream_dsh_call(message, origin)
     except Exception as exc:
-        logger.warning("hermes-a2a-bridge: stream worker failed: %s", exc)
+        logger.warning("dsh-hermes-link: stream worker failed: %s", exc)
 
 
 def _spawn_stream_worker(
@@ -733,7 +733,7 @@ def _spawn_stream_worker(
     thread = threading.Thread(
         target=_stream_worker,
         args=(message, origin) if not request_meta else (message, origin, request_meta),
-        name="hermes-a2a-bridge-stream",
+        name="dsh-hermes-link-stream",
         daemon=True,
     )
     thread.start()
@@ -769,7 +769,7 @@ def _on_pre_tool_call(
     # 不静默改用默认值，否则调用方会误以为参数生效了。
     request_meta, option_error = _extract_request_meta(args)
     if option_error is not None:
-        logger.warning("hermes-a2a-bridge: a2a 参数不合法，已拒绝投递: %s", option_error)
+        logger.warning("dsh-hermes-link: a2a 参数不合法，已拒绝投递: %s", option_error)
         return {
             "action": "block",
             "message": f"[a2a] ⚠️ 参数不合法：{option_error}——本次未投递。",
@@ -783,7 +783,7 @@ def _on_pre_tool_call(
     explicit_norm, explicit_reason = _normalize_origin_token(explicit_raw)
     if explicit_raw and not explicit_norm:
         logger.warning(
-            "hermes-a2a-bridge: context_id 无法解析出 platform/chat_id，"
+            "dsh-hermes-link: context_id 无法解析出 platform/chat_id，"
             "本次直播与结果送达将被禁用（任务仍会执行，报告仅落工作区）；"
             "raw=%r reason=%s",
             explicit_raw,
@@ -798,7 +798,7 @@ def _on_pre_tool_call(
     origin_norm, origin_reason = _normalize_origin_token(origin)
     if origin and not origin_norm:
         logger.warning(
-            "hermes-a2a-bridge: 消息面 origin 无法解析出 platform/chat_id，"
+            "dsh-hermes-link: 消息面 origin 无法解析出 platform/chat_id，"
             "本次直播与结果送达将被禁用；raw=%r reason=%s",
             origin,
             origin_reason,
@@ -856,7 +856,7 @@ def _on_pre_tool_call(
                 return {"action": "block", "message": receipt}
             except Exception as exc:
                 logger.warning(
-                    "hermes-a2a-bridge: stream worker spawn failed, fallback sync: %s",
+                    "dsh-hermes-link: stream worker spawn failed, fallback sync: %s",
                     exc,
                 )
                 # 回退：落到下方「仅注入 origin」分支，让原 a2a_call 走同步
@@ -866,7 +866,7 @@ def _on_pre_tool_call(
     # message 空 / 非 a2a_call）——**响亮拒绝**，否则调用方会以为工作区/档位已生效。
     if request_meta:
         logger.warning(
-            "hermes-a2a-bridge: 请求级选项未被生效路径消费（collector/目标/origin 不满足）: %s",
+            "dsh-hermes-link: 请求级选项未被生效路径消费（collector/目标/origin 不满足）: %s",
             _describe_request_meta(request_meta),
         )
         return {
@@ -921,7 +921,7 @@ def register(ctx) -> None:
         # card 默认 off（灰度）：存原始值，解析在每次任务开始经 _read_card_mode。
         _CARD = ctx.get_config("collector.card", "off")
     except Exception as exc:  # 读配置失败按默认处理，绝不阻断插件加载
-        logger.warning("hermes-a2a-bridge: read collector settings failed: %s", exc)
+        logger.warning("dsh-hermes-link: read collector settings failed: %s", exc)
         _COLLECTOR_ENABLED = False
         _EVENTS = True
         _CONTENT = True

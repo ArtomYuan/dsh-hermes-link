@@ -9,7 +9,7 @@ import { defineConfig } from 'tsdown'
 // else must inline (a require() the table cannot answer throws at runtime).
 // `scripts/check-client-bundle.mjs` asserts both after the build.
 
-const ID = '@artomyuan/dsh-a2a-server'
+const ID = '@artomyuan/dsh-hermes-link'
 
 /** The module-table baseline the shell seeds for every dynamic bundle. */
 const BASELINE_EXTERNALS = new Set([

@@ -1,4 +1,4 @@
-# dsh-a2a-server
+# dsh-hermes-link
 
 [English](README.en.md) | **简体中文**
 
@@ -8,7 +8,7 @@ agent（如 Hermes），实现「Hermes = brain，dsh = arms」的互操作。
 ## 效果
 
 以下效果由本库的 A2A 服务端与流式事件驱动，客户端侧渲染由
-[hermes-a2a-bridge](https://github.com/ArtomYuan/hermes-a2a-bridge) 完成（工具命令 /
+[dsh-hermes-link](https://github.com/ArtomYuan/dsh-hermes-link) 完成（工具命令 /
 执行结果 / 最终文本的代码框渲染、进度推送到飞书 / QQ）。
 
 ### 直播流样式
@@ -148,16 +148,16 @@ dsh 在任务中途调用 `ask_user_question` 时，本服务端把该提问**�
   因此两者会落到**两个会话**（复用键含 cwd）。跨调用「记住这次选的工作区」属于 §2.2
   首选定/绑定（本轮未实现）；在那之前，调用方应每次把 `workspace` 带上。
 
-## 与 hermes-a2a-bridge 的关系
+## 与 dsh-hermes-link 的关系
 
 本库暴露标准 A2A 接口，不依赖任何特定客户端——其他 A2A 客户端可直接调用。
 Hermes 用户如需完整体验（过程直播 / 会话连续性 / 单执行），可搭配
-[hermes-a2a-bridge](https://github.com/ArtomYuan/hermes-a2a-bridge)。两库非强绑定，按需组合：
+[dsh-hermes-link](https://github.com/ArtomYuan/dsh-hermes-link)。两库非强绑定，按需组合：
 
 | 组合 | 能实现 |
 | --- | --- |
 | 只用本库 | 标准 A2A 接口，任意 A2A 客户端可直接调用 |
-| 搭配 hermes-a2a-bridge | 完整体验：任务投递 + 过程直播 + 会话连续性 + 单执行 |
+| 搭配 dsh-hermes-link | 完整体验：任务投递 + 过程直播 + 会话连续性 + 单执行 |
 
 ## 版本与支持
 
@@ -180,15 +180,15 @@ Hermes 用户如需完整体验（过程直播 / 会话连续性 / 单执行）�
    - **从 npm 安装（推荐）**：
 
      ```sh
-     dsh plugin --profile <name> add @artomyuan/dsh-a2a-server
+     dsh plugin --profile <name> add @artomyuan/dsh-hermes-link
      ```
 
-     需要锁定版本时带上版本号：`dsh plugin --profile <name> add @artomyuan/dsh-a2a-server@0.5.1`。
+     需要锁定版本时带上版本号：`dsh plugin --profile <name> add @artomyuan/dsh-hermes-link@0.5.1`。
 
    - **从 GitHub 源码安装**（用于尝鲜尚未发布的改动；**必须固定 commit**）：
 
      ```sh
-     dsh plugin --profile <name> add github:ArtomYuan/dsh-a2a-server#<commit>
+     dsh plugin --profile <name> add github:ArtomYuan/dsh-hermes-link#<commit>
      ```
 
      首次 `add` 会因 pnpm ≥10 默认拒绝 git 依赖的 `prepare` 脚本而失败，按提示把包键
@@ -196,7 +196,7 @@ Hermes 用户如需完整体验（过程直播 / 会话连续性 / 单执行）�
 
      ```yaml
      allowBuilds:
-       @artomyuan/dsh-a2a-server: true
+       @artomyuan/dsh-hermes-link: true
      ```
 
 2. 在 profile 的 cordis 配置里给 A2A server 插件填最小配置（`port` / `authToken` /

@@ -1,4 +1,4 @@
-"""hermes-a2a-bridge 的 origin→contextId 注入单元测试（纯静态，不接 gateway）.
+"""dsh-hermes-link 的 origin→contextId 注入单元测试（纯静态，不接 gateway）.
 
 运行方式
 --------
@@ -10,7 +10,7 @@
 
 CLI 集成验证留窗口期
 --------------------
-gateway 生效需在 ~/.hermes/config.yaml 的 plugins.enabled 加入 hermes-a2a-bridge 并
+gateway 生效需在 ~/.hermes/config.yaml 的 plugins.enabled 加入 dsh-hermes-link 并
 重启 gateway（插件发现是一次性、进程内缓存）。本阶段不重启，故此处仅覆盖静态可跑的
 注入逻辑；真实 gateway 下的端到端行为验证延后到 P2c（流式消费者）窗口一并执行。
 """
@@ -24,7 +24,7 @@ import unittest
 _WORKTREE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MODULE_PATH = os.path.join(_WORKTREE, "__init__.py")
 
-# 目录名带连字符（hermes-a2a-bridge）不能直接 import，用 spec 加载。
+# 目录名带连字符（dsh-hermes-link）不能直接 import，用 spec 加载。
 _spec = importlib.util.spec_from_file_location("hermes_a2a_bridge", _MODULE_PATH)
 _MODULE = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_MODULE)

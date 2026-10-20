@@ -3,6 +3,44 @@
 > 自 0.10.0 起，本文件是**唯一账本**（双语小节）。两包内的 CHANGELOG 保留为历史
 > （0.9.0 / 0.7.0 及更早），0.10.0 起变更记在这里。
 
+## [0.10.1] - 2026-10-20
+
+### 中文
+
+**统一更名**：安装面与仓库统一为 DHL 名 `dsh-hermes-link`（原 `hermes-a2a-bridge` +
+`dsh-a2a-server` 合并而来，0.10.1 起两者共用本名；历史包名冻结保留）。
+
+- 桥：`hermes/plugin.yaml` `name: dsh-hermes-link`；仪表盘 manifest name/tab 路由同步；
+- 服务端：`dsh/package.json` `name: @artomyuan/dsh-hermes-link`；bundle patch 的 `name:`
+  同步（cordis 行 id 仍是 `a2a-server`，配置面与设置命名空间不变）；
+- 安装器：`SERVER_PKG_DIR` → `…/@artomyuan/dsh-hermes-link`，`BRIDGE_DIR` →
+  `~/.hermes/plugins/dsh-hermes-link`；
+- 文档：README / CONFIGURATION 全量更名；历史 CHANGELOG 条目不改；
+- 版本：`plugin.yaml` = `package.json` = 仪表盘 manifest = agent-card = **0.10.1**。
+
+**宿主侧切换**（旧装仍在旧路径，需重装）：把 `~/.hermes/config.yaml` 的
+`plugins.enabled` 中旧名改为 `dsh-hermes-link`；旧插件目录与旧 npm 包目录删除；
+再按 `README` 的顺序安装（先服务端重载 → 再桥重载）。
+
+### English
+
+**Renamed** to the DHL name `dsh-hermes-link` across install surfaces and the repository
+(the original `hermes-a2a-bridge` + `dsh-a2a-server` were merged into this repository; from
+0.10.1 both halves share this name, the historical package names are frozen).
+
+- bridge: `hermes/plugin.yaml` `name: dsh-hermes-link`; dashboard manifest name/tab route synced;
+- server: `dsh/package.json` `name: @artomyuan/dsh-hermes-link`; the bundle patch `name:` synced
+  (the cordis row id stays `a2a-server`, so the config surface and settings namespace are unchanged);
+- installer: `SERVER_PKG_DIR` → `…/@artomyuan/dsh-hermes-link`, `BRIDGE_DIR` →
+  `~/.hermes/plugins/dsh-hermes-link`;
+- docs: README / CONFIGURATION renamed throughout; historical CHANGELOG entries untouched;
+- versions: `plugin.yaml` = `package.json` = dashboard manifest = agent card = **0.10.1**.
+
+**Host-side switch** (old installs remain at the old paths): change the old name to
+`dsh-hermes-link` in `~/.hermes/config.yaml` `plugins.enabled`; remove the old plugin directory
+and the old npm package directory; then install in order per the README (server reload first,
+then bridge reload).
+
 ## [0.10.0] - 2026-10-19
 
 ### 中文

@@ -1,4 +1,4 @@
-"""hermes-a2a-bridge 真实流回归测试（v0.7.0 dsh 行形态，纯 stdlib unittest）.
+"""dsh-hermes-link 真实流回归测试（v0.7.0 dsh 行形态，纯 stdlib unittest）.
 
 运行方式
 --------

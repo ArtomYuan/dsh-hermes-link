@@ -1,10 +1,10 @@
-"""hermes-a2a-bridge 直播消费者（P2c）单元测试（纯静态，不接 gateway / 不接 dsh）.
+"""dsh-hermes-link 直播消费者（P2c）单元测试（纯静态，不接 gateway / 不接 dsh）.
 
 运行方式
 --------
     python3 tests/test_consumer.py
 
-仅用标准库 ``unittest``，不依赖 pytest。用与 dsh-a2a-server 真实 wire 格式一致的
+仅用标准库 ``unittest``，不依赖 pytest。用与 dsh-hermes-link 真实 wire 格式一致的
 合成 SSE ``data:`` 串驱动 ``parse_sse_lines`` + ``normalize_events`` + ``render_line``
 + ``Throttler`` + ``make_sender``（mock sender 记录发送列表），并输出「事件序列 →
 渲染消息样例」对照表供人工核对。
@@ -190,7 +190,7 @@ def _env(result):
 
 
 def _sse(*results):
-    """把 result 字典序列串成 dsh-a2a-server 的 SSE 文本（``data: <json>\\n\\n``）。"""
+    """把 result 字典序列串成 dsh-hermes-link 的 SSE 文本（``data: <json>\\n\\n``）。"""
     return "".join("data: " + json.dumps(_env(r), ensure_ascii=False) + "\n\n" for r in results)
 
 

@@ -10,7 +10,7 @@
  * - **优先级**：显式参数 > 绑定 > 缺省（现状）。换工作区＝换会话（复用键含 cwd 由既有
  *   逻辑保证，本模块只负责「记住选择」）。
  *
- * @module dsh-a2a-server/link-binding
+ * @module dsh-hermes-link/link-binding
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
@@ -68,13 +68,13 @@ export async function loadBindingStore(path: string, warn: (message: string) => 
   try {
     const raw = JSON.parse(await readFile(path, 'utf8')) as { version?: unknown; bindings?: unknown }
     if (raw.version !== LINK_STATE_VERSION) {
-      warn(`[dsh-a2a-server] 绑定账本版本不符（${String(raw.version)} ≠ ${LINK_STATE_VERSION}），按空表启动: ${path}`)
+      warn(`[dsh-hermes-link] 绑定账本版本不符（${String(raw.version)} ≠ ${LINK_STATE_VERSION}），按空表启动: ${path}`)
     } else if (typeof raw.bindings === 'object' && raw.bindings !== null && !Array.isArray(raw.bindings)) {
       initial = raw.bindings as Record<string, LinkBinding>
     }
   } catch (e) {
     const code = (e as { code?: unknown }).code
-    if (code !== 'ENOENT') warn(`[dsh-a2a-server] 绑定账本读取失败，按空表启动: ${(e as Error)?.message ?? e}`)
+    if (code !== 'ENOENT') warn(`[dsh-hermes-link] 绑定账本读取失败，按空表启动: ${(e as Error)?.message ?? e}`)
   }
   return createBindingStore(initial, async (all) => {
     await mkdir(dirname(path), { recursive: true })

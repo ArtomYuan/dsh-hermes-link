@@ -114,7 +114,7 @@ export async function waitForSubagentQuiescence(
   const source = host.subagentChildren
   if (source === undefined) {
     host.warn(
-      '[dsh-a2a-server] 子代理活口不可查（ctx.subagents.listChildren 缺失）：'
+      '[dsh-hermes-link] 子代理活口不可查（ctx.subagents.listChildren 缺失）：'
         + '释放前不等子代理，回传兜底仍由 dsh-subagent 队列补丁承担',
     )
     return { outcome: 'unavailable', waitedMs: 0, rounds: 0, liveChildren: 0 }
@@ -136,7 +136,7 @@ export async function waitForSubagentQuiescence(
       return continuableChildIds(await source.listChildren(parentSessionId))
     } catch (error) {
       host.warn(
-        '[dsh-a2a-server] 读取子代理目录失败，本次请求不等待子代理：'
+        '[dsh-hermes-link] 读取子代理目录失败，本次请求不等待子代理：'
           + `${(error as Error)?.message ?? String(error)}`,
       )
       return undefined

@@ -1,4 +1,4 @@
-# hermes-a2a-bridge
+# dsh-hermes-link
 
 [English](README.en.md) | **简体中文**
 
@@ -147,7 +147,7 @@ dsh 在任务中途用 `ask_user_question` 提问时，问题会以**飞书 2.0 
 - **零悬挂**：只有「作答 / 跳过 / 槽位收场」三种出口。发卡未真正送达、长连接未就位、
   槽位收场、处理异常一律以「跳过」续投（服务端把该提问以中止收口），任务绝不留在
   没有出路的等待里。
-- **需配套**：`dsh-a2a-server` ≥0.6.0 与飞书适配器正式补丁（`hermes_ask_action`
+- **需配套**：`dsh-hermes-link` ≥0.6.0 与飞书适配器正式补丁（`hermes_ask_action`
   命名空间 + 处理器注册表 + `is_ws_ready()`，见 `~/.hermes/docs/hermes/custom-patches.md`）。
   适配器补丁未打时，桥会在直播起手时响亮告警；点击分支由适配器侧如实换卡，不伪造成功。
 
@@ -170,14 +170,14 @@ dsh 在任务中途用 `ask_user_question` 提问时，问题会以**飞书 2.0 
 
 ![链路时序](assets/sequence-zh.png)
 
-## 与 dsh-a2a-server 的关系
+## 与 dsh-hermes-link 的关系
 
-本插件与 [dsh-a2a-server](https://github.com/ArtomYuan/dsh-a2a-server) 并非强绑定，可按需组合：
+本插件与 [dsh-hermes-link](https://github.com/ArtomYuan/dsh-hermes-link) 并非强绑定，可按需组合：
 
 | 组合 | 能实现 |
 | --- | --- |
-| 只用 dsh-a2a-server | 暴露标准 A2A 接口，任意 A2A 客户端可直接调用 |
-| 只用本插件 | 不适用——本插件依赖 dsh-a2a-server 作为服务端 |
+| 只用 dsh-hermes-link | 暴露标准 A2A 接口，任意 A2A 客户端可直接调用 |
+| 只用本插件 | 不适用——本插件依赖 dsh-hermes-link 作为服务端 |
 | 两者一起用 | 完整体验：任务投递 + 过程直播（dsh 行形态过程组 + 收束行）+ 会话连续性（一个对话一个 dsh 会话）+ 单执行 |
 
 ## 安装说明
@@ -186,7 +186,7 @@ dsh 在任务中途用 `ask_user_question` 提问时，问题会以**飞书 2.0 
 
    ```sh
    mkdir -p ~/.hermes/plugins
-   git clone https://github.com/ArtomYuan/hermes-a2a-bridge ~/.hermes/plugins/hermes-a2a-bridge
+   git clone https://github.com/ArtomYuan/dsh-hermes-link ~/.hermes/plugins/dsh-hermes-link
    ```
 
 2. 在 `~/.hermes/config.yaml` 启用插件：
@@ -194,10 +194,10 @@ dsh 在任务中途用 `ask_user_question` 提问时，问题会以**飞书 2.0 
    ```yaml
    plugins:
      enabled:
-       - hermes-a2a-bridge
+       - dsh-hermes-link
    ```
 
-3. 配好 dsh peer（指向 dsh-a2a-server）：
+3. 配好 dsh peer（指向 dsh-hermes-link）：
 
    ```yaml
    a2a_agents:
@@ -222,8 +222,8 @@ dsh 在任务中途用 `ask_user_question` 提问时，问题会以**飞书 2.0 
 标准 / 详细 / 完全展开）——可在 Hermes
 Dashboard「插件管理」页顶部的「A2A 直播开关」面板直接
 点选或下拉，保存**即时生效（无需重启网关，热读）**。后端端点
-`GET/POST /api/plugins/hermes-a2a-bridge/collector` 严格校验后写回
-`plugins.entries.hermes-a2a-bridge.settings.collector.*`（保留条目顶层
+`GET/POST /api/plugins/dsh-hermes-link/collector` 严格校验后写回
+`plugins.entries.dsh-hermes-link.settings.collector.*`（保留条目顶层
 `allow_tool_override` 与其它所有键；POST 容忍旧键 `code_blocks` 作为遗留
 `content` 的 deprecated 别名）。首次部署面板需重启一次 dashboard 进程。
 详见 [CONFIGURATION.md](CONFIGURATION.md)「直播消费者」。
